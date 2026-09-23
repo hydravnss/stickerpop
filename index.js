@@ -4,64 +4,64 @@
     const IMAGE_SELECTOR = '#expression-image';
     const WRAPPER_SELECTOR = '#expression-wrapper';
 
-    let currentImage = null;
-    let currentWrapper = null;
+    let hiddenSticker = null;
 
-    function setupSticker() {
-        const image = document.querySelector(IMAGE_SELECTOR);
-        const wrapper = document.querySelector(WRAPPER_SELECTOR);
+    /*
+     * Clic global.
+     * Fonctionne même si SillyTavern recrée le sticker.
+     */
+    document.addEventListener('click', (event) => {
 
-        if (!image || !wrapper) return;
-
-        /*
-         * Nouveau sticker détecté :
-         * on réinitialise son état.
-         */
-        if (image !== currentImage) {
-            currentImage = image;
-            currentWrapper = wrapper;
-
-            image.classList.remove('stickerpop-hidden');
-            wrapper.classList.remove('stickerpop-hidden');
-
-            setupClickEvents(image, wrapper);
-        }
-    }
-
-    function setupClickEvents(image, wrapper) {
-
-        if (image.dataset.stickerpopReady === 'true') {
-            return;
-        }
-
-        image.dataset.stickerpopReady = 'true';
+        const image = event.target.closest(IMAGE_SELECTOR);
 
         /*
-         * Clic directement sur le sticker
-         * → disparition
+         * Clic sur le sticker
+         * → on le cache
          */
-        image.addEventListener('click', (event) => {
+        if (image) {
 
             event.stopPropagation();
 
-            image.classList.add('stickerpop-hidden');
-            wrapper.classList.add('stickerpop-hidden');
+            hiddenSticker = image;
 
-        });
+            image.classList.add(
+                'stickerpop-hidden'
+            );
+
+            const wrapper =
+                image.closest(
+                    WRAPPER_SELECTOR
+                );
+
+            if (wrapper) {
+
+                wrapper.classList.add(
+                    'stickerpop-hidden'
+                );
+
+            }
+
+            return;
+        }
+
 
         /*
-         * Clic sur la zone où se trouvait le sticker
-         * → réapparition
+         * Si le sticker est caché,
+         * clic dans sa zone → réapparition
          */
-        wrapper.addEventListener('click', () => {
+        if (hiddenSticker) {
+
+            const wrapper =
+                hiddenSticker.closest(
+                    WRAPPER_SELECTOR
+                );
 
             if (
-                image.classList.contains(
-                    'stickerpop-hidden'
-                )
+                wrapper &&
+                wrapper.contains(event.target)
             ) {
 
-                image.classList.remove(
+                hiddenSticker.classList.remove(
                     'stickerpop-hidden'
                 );
 
@@ -69,65 +69,72 @@
                     'stickerpop-hidden'
                 );
 
+                hiddenSticker = null;
+
+            }
+
+        }
+
+    }, true);
+
+
+    /*
+     * Surveille l'apparition de nouveaux stickers.
+     */
+    const observer =
+        new MutationObserver(() => {
+
+            const image =
+                document.querySelector(
+                    IMAGE_SELECTOR
+                );
+
+            if (!image) return;
+
+            /*
+             * Nouveau sticker :
+             * on s'assure qu'il n'est pas caché.
+             */
+            if (
+                !image.classList.contains(
+                    'stickerpop-hidden'
+                )
+            ) {
+
+                image.style.pointerEvents =
+                    'auto';
+
             }
 
         });
+
+
+    function start() {
+
+        observer.observe(
+            document.body,
+            {
+                childList: true,
+                subtree: true
+            }
+        );
+
     }
 
-    /*
-     * Surveille les changements de sticker
-     * effectués par SillyTavern.
-     */
-    function startObserver() {
-
-        const wrapper =
-            document.querySelector(
-                WRAPPER_SELECTOR
-            );
-
-        if (!wrapper) {
-            setTimeout(startObserver, 500);
-            return;
-        }
-
-        const observer =
-            new MutationObserver(() => {
-                setupSticker();
-            });
-
-        observer.observe(wrapper, {
-            childList: true,
-            subtree: true,
-            attributes: true,
-            attributeFilter: [
-                'src',
-                'class'
-            ]
-        });
-
-        setupSticker();
-    }
-
-    /*
-     * Attend que SillyTavern ait chargé
-     * son interface.
-     */
-    function init() {
-        startObserver();
-    }
 
     if (
-        document.readyState === 'loading'
+        document.readyState ===
+        'loading'
     ) {
 
         document.addEventListener(
             'DOMContentLoaded',
-            init
+            start
         );
 
     } else {
 
-        init();
+        start();
 
     }
 
