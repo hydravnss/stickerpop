@@ -1,0 +1,146 @@
+/* =========================================
+   STICKERPOP
+   ========================================= */
+
+#expression-wrapper {
+    background: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}
+
+
+/* =========================================
+   STICKER
+   ========================================= */
+
+#expression-image {
+
+    background: transparent !important;
+
+    border: none !important;
+
+    box-shadow: none !important;
+
+    cursor: pointer;
+
+    transform-origin: center center;
+
+    /*
+     * Animation d'apparition
+     */
+    animation:
+        stickerPopIn
+        0.30s
+        cubic-bezier(.2, .85, .3, 1.25);
+
+    transition:
+        opacity .18s ease,
+        transform .18s ease,
+        filter .18s ease;
+
+}
+
+
+/* =========================================
+   APPARITION
+   ========================================= */
+
+@keyframes stickerPopIn {
+
+    0% {
+
+        opacity: 0;
+
+        transform:
+            scale(.55)
+            rotate(-4deg);
+
+    }
+
+    55% {
+
+        opacity: 1;
+
+        transform:
+            scale(1.08)
+            rotate(1deg);
+
+    }
+
+    100% {
+
+        opacity: 1;
+
+        transform:
+            scale(1)
+            rotate(0deg);
+
+    }
+
+}
+
+
+/* =========================================
+   DISPARITION
+   ========================================= */
+
+#expression-image.stickerpop-hidden {
+
+    opacity: 0 !important;
+
+    transform:
+        scale(.55) !important;
+
+    pointer-events: none !important;
+
+}
+
+
+/* =========================================
+   CONTENEUR APRÈS DISPARITION
+   ========================================= */
+
+#expression-wrapper.stickerpop-hidden {
+
+    cursor: pointer;
+
+}
+
+
+/*
+ * On garde la zone du sticker active
+ * même lorsqu'il est invisible.
+ */
+#expression-wrapper.stickerpop-hidden
+#expression-image {
+
+    visibility: visible;
+
+}
+
+
+/* =========================================
+   PETIT EFFET AU SURVOL
+   ========================================= */
+
+#expression-image:hover {
+
+    transform:
+        scale(1.04);
+
+}
+
+
+/* =========================================
+   MOBILE
+   ========================================= */
+
+@media (max-width: 600px) {
+
+    #expression-image {
+
+        touch-action: manipulation;
+
+    }
+
+}
