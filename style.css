@@ -3,9 +3,13 @@
    ========================================= */
 
 #expression-wrapper {
+
     background: transparent !important;
+
     border: none !important;
+
     box-shadow: none !important;
+
 }
 
 
@@ -25,18 +29,14 @@
 
     transform-origin: center center;
 
-    /*
-     * Animation d'apparition
-     */
     animation:
         stickerPopIn
-        0.30s
-        cubic-bezier(.2, .85, .3, 1.25);
+        .30s
+        cubic-bezier(.2,.85,.3,1.25);
 
     transition:
         opacity .18s ease,
-        transform .18s ease,
-        filter .18s ease;
+        transform .18s ease;
 
 }
 
@@ -52,18 +52,16 @@
         opacity: 0;
 
         transform:
-            scale(.55)
-            rotate(-4deg);
+            scale(.55);
 
     }
 
-    55% {
+    65% {
 
         opacity: 1;
 
         transform:
-            scale(1.08)
-            rotate(1deg);
+            scale(1.08);
 
     }
 
@@ -72,8 +70,7 @@
         opacity: 1;
 
         transform:
-            scale(1)
-            rotate(0deg);
+            scale(1);
 
     }
 
@@ -81,7 +78,7 @@
 
 
 /* =========================================
-   DISPARITION
+   STICKER CACHÉ
    ========================================= */
 
 #expression-image.stickerpop-hidden {
@@ -91,42 +88,24 @@
     transform:
         scale(.55) !important;
 
-    pointer-events: none !important;
+    /*
+     * IMPORTANT :
+     * on ne met PAS pointer-events:none
+     * sinon impossible de cliquer pour
+     * le faire revenir.
+     */
+    pointer-events: auto !important;
 
 }
 
 
 /* =========================================
-   CONTENEUR APRÈS DISPARITION
+   ZONE DU STICKER CACHÉ
    ========================================= */
 
 #expression-wrapper.stickerpop-hidden {
 
     cursor: pointer;
-
-}
-
-
-/*
- * On garde la zone du sticker active
- * même lorsqu'il est invisible.
- */
-#expression-wrapper.stickerpop-hidden
-#expression-image {
-
-    visibility: visible;
-
-}
-
-
-/* =========================================
-   PETIT EFFET AU SURVOL
-   ========================================= */
-
-#expression-image:hover {
-
-    transform:
-        scale(1.04);
 
 }
 
