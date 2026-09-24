@@ -3,81 +3,17 @@
 
     const IMAGE_SELECTOR = '#expression-image';
 
-    let hiddenSticker = null;
-    let hitbox = null;
+    let hidden = false;
+    let hiddenRect = null;
+    let currentImage = null;
 
 
     /* =========================================================
-       CRÉE LA ZONE INVISIBLE EXACTEMENT SUR LE STICKER
+       RÉCUPÈRE LE STICKER
        ========================================================= */
 
-    function createHitbox(image) {
-
-        removeHitbox();
-
-        const rect = image.getBoundingClientRect();
-
-        hitbox = document.createElement('div');
-
-        hitbox.id = 'stickerpop-hitbox';
-
-        Object.assign(hitbox.style, {
-            position: 'fixed',
-            left: `${rect.left}px`,
-            top: `${rect.top}px`,
-            width: `${rect.width}px`,
-            height: `${rect.height}px`,
-
-            zIndex: '2147483647',
-
-            background: 'transparent',
-
-            cursor: 'pointer',
-
-            pointerEvents: 'auto',
-
-            touchAction: 'manipulation'
-        });
-
-
-        hitbox.addEventListener('click', (event) => {
-
-            event.preventDefault();
-            event.stopPropagation();
-
-            showSticker();
-
-        });
-
-
-        hitbox.addEventListener('touchend', (event) => {
-
-            event.preventDefault();
-            event.stopPropagation();
-
-            showSticker();
-
-        }, {
-            passive: false
-        });
-
-
-        document.body.appendChild(hitbox);
-    }
-
-
-    /* =========================================================
-       SUPPRIME LA ZONE INVISIBLE
-       ========================================================= */
-
-    function removeHitbox() {
-
-        if (hitbox) {
-
-            hitbox.remove();
-
-            hitbox = null;
-        }
+    function getImage() {
+        return document.querySelector(IMAGE_SELECTOR);
     }
 
 
@@ -89,48 +25,69 @@
 
         if (!image) return;
 
-        hiddenSticker = image;
+        const rect = image.getBoundingClientRect();
 
-        /*
-         * On garde sa taille et sa position.
-         * On le rend simplement invisible.
-         */
+        hiddenRect = {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom
+        };
+
+        hidden = true;
+        currentImage = image;
+
         image.classList.add(
             'stickerpop-hidden'
         );
-
-        /*
-         * Crée la zone de clic exactement
-         * à l'endroit du sticker.
-         */
-        createHitbox(image);
     }
 
 
     /* =========================================================
-       FAIT RÉAPPARAÎTRE LE STICKER
+       RÉAFFICHE LE STICKER
        ========================================================= */
 
     function showSticker() {
 
-        if (!hiddenSticker) return;
+        const image = getImage();
 
-        hiddenSticker.classList.remove(
-            'stickerpop-hidden'
-        );
+        if (image) {
 
-        removeHitbox();
+            image.classList.remove(
+                'stickerpop-hidden'
+            );
 
-        hiddenSticker = null;
+        }
+
+        hidden = false;
+        hiddenRect = null;
+        currentImage = null;
     }
 
 
     /* =========================================================
-       CLIC SUR LE STICKER
+       TESTE SI LE CLIC EST DANS L'ANCIENNE ZONE DU STICKER
+       ========================================================= */
+
+    function isInsideSticker(x, y) {
+
+        if (!hiddenRect) return false;
+
+        return (
+            x >= hiddenRect.left &&
+            x <= hiddenRect.right &&
+            y >= hiddenRect.top &&
+            y <= hiddenRect.bottom
+        );
+    }
+
+
+    /* =========================================================
+       CLIC / TOUCH
        ========================================================= */
 
     document.addEventListener(
-        'click',
+        'pointerup',
         (event) => {
 
             const image =
@@ -138,22 +95,40 @@
                     IMAGE_SELECTOR
                 );
 
-            if (!image) return;
 
             /*
-             * Si le sticker est visible :
-             * on le cache.
+             * STICKER VISIBLE
+             * → clic dessus = disparition
              */
             if (
-                !image.classList.contains(
-                    'stickerpop-hidden'
-                )
+                image &&
+                !hidden
             ) {
 
-                event.preventDefault();
                 event.stopPropagation();
 
                 hideSticker(image);
+
+                return;
+            }
+
+
+            /*
+             * STICKER CACHÉ
+             * → uniquement la zone exacte
+             *   où il se trouvait = apparition
+             */
+            if (
+                hidden &&
+                hiddenRect &&
+                isInsideSticker(
+                    event.clientX,
+                    event.clientY
+                )
+            ) {
+
+                showSticker();
+
             }
 
         },
@@ -162,59 +137,77 @@
 
 
     /* =========================================================
-       TOUCH IPHONE
-       ========================================================= */
-
-    document.addEventListener(
-        'touchend',
-        (event) => {
-
-            const image =
-                event.target.closest?.(
-                    IMAGE_SELECTOR
-                );
-
-            if (!image) return;
-
-            if (
-                !image.classList.contains(
-                    'stickerpop-hidden'
-                )
-            ) {
-
-                event.preventDefault();
-                event.stopPropagation();
-
-                hideSticker(image);
-            }
-
-        },
-        {
-            capture: true,
-            passive: false
-        }
-    );
-
-
-    /* =========================================================
-       SI SILLYTAVERN RECRÉE LE STICKER
+       SURVEILLE LES MODIFICATIONS DE SILLYTAVERN
        ========================================================= */
 
     const observer =
         new MutationObserver(() => {
 
-            const image =
-                document.querySelector(
-                    IMAGE_SELECTOR
-                );
+            const image = getImage();
 
             if (!image) return;
 
-            image.style.pointerEvents =
-                'auto';
 
+            /*
+             * SillyTavern peut recréer #expression-image
+             * lorsqu'on ouvre la barre de saisie.
+             *
+             * Si le sticker était caché avant la modification,
+             * on cache également le nouveau sticker.
+             */
+            if (hidden) {
+
+                image.classList.add(
+                    'stickerpop-hidden'
+                );
+
+                currentImage = image;
+            }
+
+
+            image.style.pointerEvents =
+                hidden
+                    ? 'none'
+                    : 'auto';
         });
 
+
+    /* =========================================================
+       RESIZE / BARRE DE SAISIE
+       ========================================================= */
+
+    /*
+     * Quand la barre de saisie s'ouvre ou se ferme,
+     * SillyTavern peut déplacer le sticker.
+     *
+     * On recalcule sa position uniquement s'il est caché.
+     */
+    window.addEventListener(
+        'resize',
+        () => {
+
+            if (!hidden) return;
+
+            const image = getImage();
+
+            if (!image) return;
+
+            const rect =
+                image.getBoundingClientRect();
+
+            hiddenRect = {
+                left: rect.left,
+                top: rect.top,
+                right: rect.right,
+                bottom: rect.bottom
+            };
+        }
+    );
+
+
+    /* =========================================================
+       INITIALISATION
+       ========================================================= */
 
     function start() {
 
@@ -227,6 +220,14 @@
                 subtree: true
             }
         );
+
+        const image = getImage();
+
+        if (image) {
+
+            image.style.pointerEvents =
+                'auto';
+        }
     }
 
 
