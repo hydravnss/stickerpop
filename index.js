@@ -2,140 +2,204 @@
     'use strict';
 
     const IMAGE_SELECTOR = '#expression-image';
-    const WRAPPER_SELECTOR = '#expression-wrapper';
 
     let hiddenSticker = null;
-    let hiddenZone = null;
+    let hitbox = null;
 
-    /*
-     * Récupère la zone exacte occupée par le sticker.
-     */
-    function getStickerZone(image) {
-        const wrapper = image?.closest(WRAPPER_SELECTOR);
 
-        if (!wrapper) return null;
+    /* =========================================================
+       CRÉE LA ZONE INVISIBLE EXACTEMENT SUR LE STICKER
+       ========================================================= */
+
+    function createHitbox(image) {
+
+        removeHitbox();
 
         const rect = image.getBoundingClientRect();
 
-        return {
-            wrapper,
-            left: rect.left,
-            top: rect.top,
-            right: rect.right,
-            bottom: rect.bottom
-        };
-    }
+        hitbox = document.createElement('div');
 
-    /*
-     * Toggle du sticker :
-     *
-     * 1. Clic sur le sticker visible
-     *    → il disparaît.
-     *
-     * 2. Clic exactement à l'endroit où se trouvait
-     *    le sticker
-     *    → il réapparaît.
-     *
-     * Les rebords du wrapper ne sont PAS cliquables.
-     */
-    document.addEventListener('click', (event) => {
+        hitbox.id = 'stickerpop-hitbox';
 
-        const image = event.target.closest?.(IMAGE_SELECTOR);
+        Object.assign(hitbox.style, {
+            position: 'fixed',
+            left: `${rect.left}px`,
+            top: `${rect.top}px`,
+            width: `${rect.width}px`,
+            height: `${rect.height}px`,
 
-        /*
-         * STICKER VISIBLE
-         */
-        if (image) {
+            zIndex: '2147483647',
 
+            background: 'transparent',
+
+            cursor: 'pointer',
+
+            pointerEvents: 'auto',
+
+            touchAction: 'manipulation'
+        });
+
+
+        hitbox.addEventListener('click', (event) => {
+
+            event.preventDefault();
             event.stopPropagation();
 
-            hiddenSticker = image;
+            showSticker();
 
-            hiddenZone = getStickerZone(image);
+        });
 
-            image.classList.add(
-                'stickerpop-hidden'
-            );
 
-            const wrapper =
-                image.closest(
-                    WRAPPER_SELECTOR
-                );
+        hitbox.addEventListener('touchend', (event) => {
 
-            if (wrapper) {
+            event.preventDefault();
+            event.stopPropagation();
 
-                wrapper.classList.add(
-                    'stickerpop-hidden'
-                );
+            showSticker();
 
-            }
+        }, {
+            passive: false
+        });
 
-            return;
+
+        document.body.appendChild(hitbox);
+    }
+
+
+    /* =========================================================
+       SUPPRIME LA ZONE INVISIBLE
+       ========================================================= */
+
+    function removeHitbox() {
+
+        if (hitbox) {
+
+            hitbox.remove();
+
+            hitbox = null;
         }
+    }
 
 
-        /*
-         * STICKER CACHÉ
-         */
-        if (
-            !hiddenSticker ||
-            !hiddenZone
-        ) {
-            return;
-        }
+    /* =========================================================
+       CACHE LE STICKER
+       ========================================================= */
 
+    function hideSticker(image) {
 
-        const x = event.clientX;
-        const y = event.clientY;
+        if (!image) return;
 
+        hiddenSticker = image;
 
         /*
-         * On vérifie UNIQUEMENT la zone exacte
-         * occupée par l'image.
+         * On garde sa taille et sa position.
+         * On le rend simplement invisible.
          */
-        const insideExactZone =
-            x >= hiddenZone.left &&
-            x <= hiddenZone.right &&
-            y >= hiddenZone.top &&
-            y <= hiddenZone.bottom;
-
+        image.classList.add(
+            'stickerpop-hidden'
+        );
 
         /*
-         * Clic en dehors du sticker :
-         * on ne fait absolument rien.
+         * Crée la zone de clic exactement
+         * à l'endroit du sticker.
          */
-        if (!insideExactZone) {
-            return;
-        }
+        createHitbox(image);
+    }
 
 
-        /*
-         * Clic dans la zone exacte :
-         * le sticker réapparaît.
-         */
+    /* =========================================================
+       FAIT RÉAPPARAÎTRE LE STICKER
+       ========================================================= */
+
+    function showSticker() {
+
+        if (!hiddenSticker) return;
+
         hiddenSticker.classList.remove(
             'stickerpop-hidden'
         );
 
-        if (hiddenZone.wrapper) {
-
-            hiddenZone.wrapper.classList.remove(
-                'stickerpop-hidden'
-            );
-
-        }
-
+        removeHitbox();
 
         hiddenSticker = null;
-        hiddenZone = null;
-
-    }, true);
+    }
 
 
-    /*
-     * Surveille SillyTavern lorsqu'il recrée
-     * ou remplace le sticker.
-     */
+    /* =========================================================
+       CLIC SUR LE STICKER
+       ========================================================= */
+
+    document.addEventListener(
+        'click',
+        (event) => {
+
+            const image =
+                event.target.closest?.(
+                    IMAGE_SELECTOR
+                );
+
+            if (!image) return;
+
+            /*
+             * Si le sticker est visible :
+             * on le cache.
+             */
+            if (
+                !image.classList.contains(
+                    'stickerpop-hidden'
+                )
+            ) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                hideSticker(image);
+            }
+
+        },
+        true
+    );
+
+
+    /* =========================================================
+       TOUCH IPHONE
+       ========================================================= */
+
+    document.addEventListener(
+        'touchend',
+        (event) => {
+
+            const image =
+                event.target.closest?.(
+                    IMAGE_SELECTOR
+                );
+
+            if (!image) return;
+
+            if (
+                !image.classList.contains(
+                    'stickerpop-hidden'
+                )
+            ) {
+
+                event.preventDefault();
+                event.stopPropagation();
+
+                hideSticker(image);
+            }
+
+        },
+        {
+            capture: true,
+            passive: false
+        }
+    );
+
+
+    /* =========================================================
+       SI SILLYTAVERN RECRÉE LE STICKER
+       ========================================================= */
+
     const observer =
         new MutationObserver(() => {
 
@@ -163,7 +227,6 @@
                 subtree: true
             }
         );
-
     }
 
 
