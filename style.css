@@ -38,7 +38,7 @@
         opacity .18s ease,
         transform .18s ease;
 
-    pointer-events: auto !important;
+    pointer-events: auto;
 
     touch-action: manipulation;
 
@@ -55,8 +55,7 @@
 
         opacity: 0;
 
-        transform:
-            scale(.55);
+        transform: scale(.55);
 
     }
 
@@ -64,8 +63,7 @@
 
         opacity: 1;
 
-        transform:
-            scale(1.08);
+        transform: scale(1.08);
 
     }
 
@@ -73,8 +71,7 @@
 
         opacity: 1;
 
-        transform:
-            scale(1);
+        transform: scale(1);
 
     }
 
@@ -89,35 +86,9 @@
 
     opacity: 0 !important;
 
-    transform:
-        scale(.55) !important;
+    transform: scale(.55) !important;
 
     pointer-events: none !important;
-
-}
-
-
-/* =========================================================
-   ZONE INVISIBLE DE RÉAPPARITION
-   ========================================================= */
-
-#stickerpop-hitbox {
-
-    background: transparent !important;
-
-    border: none !important;
-
-    box-shadow: none !important;
-
-    outline: none !important;
-
-    padding: 0 !important;
-
-    margin: 0 !important;
-
-    pointer-events: auto !important;
-
-    touch-action: manipulation !important;
 
 }
 
