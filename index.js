@@ -5,24 +5,53 @@
     const WRAPPER_SELECTOR = '#expression-wrapper';
 
     let hiddenSticker = null;
+    let hiddenZone = null;
 
     /*
-     * Clic global.
-     * Fonctionne même si SillyTavern recrée le sticker.
+     * Récupère la zone exacte occupée par le sticker.
+     */
+    function getStickerZone(image) {
+        const wrapper = image?.closest(WRAPPER_SELECTOR);
+
+        if (!wrapper) return null;
+
+        const rect = image.getBoundingClientRect();
+
+        return {
+            wrapper,
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom
+        };
+    }
+
+    /*
+     * Toggle du sticker :
+     *
+     * 1. Clic sur le sticker visible
+     *    → il disparaît.
+     *
+     * 2. Clic exactement à l'endroit où se trouvait
+     *    le sticker
+     *    → il réapparaît.
+     *
+     * Les rebords du wrapper ne sont PAS cliquables.
      */
     document.addEventListener('click', (event) => {
 
-        const image = event.target.closest(IMAGE_SELECTOR);
+        const image = event.target.closest?.(IMAGE_SELECTOR);
 
         /*
-         * Clic sur le sticker
-         * → on le cache
+         * STICKER VISIBLE
          */
         if (image) {
 
             event.stopPropagation();
 
             hiddenSticker = image;
+
+            hiddenZone = getStickerZone(image);
 
             image.classList.add(
                 'stickerpop-hidden'
@@ -46,40 +75,66 @@
 
 
         /*
-         * Si le sticker est caché,
-         * clic dans sa zone → réapparition
+         * STICKER CACHÉ
          */
-        if (hiddenSticker) {
+        if (
+            !hiddenSticker ||
+            !hiddenZone
+        ) {
+            return;
+        }
 
-            const wrapper =
-                hiddenSticker.closest(
-                    WRAPPER_SELECTOR
-                );
 
-            if (
-                wrapper &&
-                wrapper.contains(event.target)
-            ) {
+        const x = event.clientX;
+        const y = event.clientY;
 
-                hiddenSticker.classList.remove(
-                    'stickerpop-hidden'
-                );
 
-                wrapper.classList.remove(
-                    'stickerpop-hidden'
-                );
+        /*
+         * On vérifie UNIQUEMENT la zone exacte
+         * occupée par l'image.
+         */
+        const insideExactZone =
+            x >= hiddenZone.left &&
+            x <= hiddenZone.right &&
+            y >= hiddenZone.top &&
+            y <= hiddenZone.bottom;
 
-                hiddenSticker = null;
 
-            }
+        /*
+         * Clic en dehors du sticker :
+         * on ne fait absolument rien.
+         */
+        if (!insideExactZone) {
+            return;
+        }
+
+
+        /*
+         * Clic dans la zone exacte :
+         * le sticker réapparaît.
+         */
+        hiddenSticker.classList.remove(
+            'stickerpop-hidden'
+        );
+
+        if (hiddenZone.wrapper) {
+
+            hiddenZone.wrapper.classList.remove(
+                'stickerpop-hidden'
+            );
 
         }
+
+
+        hiddenSticker = null;
+        hiddenZone = null;
 
     }, true);
 
 
     /*
-     * Surveille l'apparition de nouveaux stickers.
+     * Surveille SillyTavern lorsqu'il recrée
+     * ou remplace le sticker.
      */
     const observer =
         new MutationObserver(() => {
@@ -91,25 +146,15 @@
 
             if (!image) return;
 
-            /*
-             * Nouveau sticker :
-             * on s'assure qu'il n'est pas caché.
-             */
-            if (
-                !image.classList.contains(
-                    'stickerpop-hidden'
-                )
-            ) {
-
-                image.style.pointerEvents =
-                    'auto';
-
-            }
+            image.style.pointerEvents =
+                'auto';
 
         });
 
 
     function start() {
+
+        if (!document.body) return;
 
         observer.observe(
             document.body,
