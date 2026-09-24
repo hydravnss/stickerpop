@@ -89,10 +89,8 @@
         scale(.55) !important;
 
     /*
-     * IMPORTANT :
-     * on ne met PAS pointer-events:none
-     * sinon impossible de cliquer pour
-     * le faire revenir.
+     * On conserve les événements de pointeur.
+     * La zone exacte est contrôlée par index.js.
      */
     pointer-events: auto !important;
 
@@ -100,18 +98,18 @@
 
 
 /* =========================================
-   ZONE DU STICKER CACHÉ
+   WRAPPER CACHÉ
    ========================================= */
 
 #expression-wrapper.stickerpop-hidden {
 
-    cursor: pointer;
+    cursor: default;
 
 }
 
 
 /* =========================================
-   MOBILE
+   MOBILE / IPHONE
    ========================================= */
 
 @media (max-width: 600px) {
