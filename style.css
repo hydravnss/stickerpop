@@ -1,108 +1,65 @@
 /* =========================================================
-   STICKERPOP
+   STICKERPOP v1.0.1
    ========================================================= */
 
 #expression-wrapper {
-
     background: transparent !important;
-
     border: none !important;
-
     box-shadow: none !important;
-
 }
-
-
-/* =========================================================
-   STICKER
-   ========================================================= */
 
 #expression-image {
-
     background: transparent !important;
-
     border: none !important;
-
     box-shadow: none !important;
-
     cursor: pointer;
-
     transform-origin: center center;
-
-    animation:
-        stickerPopIn
-        .30s
-        cubic-bezier(.2,.85,.3,1.25);
-
-    transition:
-        opacity .18s ease,
-        transform .18s ease;
-
-    pointer-events: auto;
-
     touch-action: manipulation;
-
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
 }
 
-
-/* =========================================================
-   APPARITION
-   ========================================================= */
+/* Animation d'entrée : ajoutée/retirée par le JS sur l'image qui apparaît.
+   Elle ne touche PAS à opacity (SillyTavern fait déjà son fondu) et finit à scale(1) : aucune chance de rester invisible. */
+img.expression.stickerpop-enter {
+    animation: stickerPopIn .30s cubic-bezier(.2, .85, .3, 1.25) 1 none;
+}
 
 @keyframes stickerPopIn {
-
-    0% {
-
-        opacity: 0;
-
-        transform: scale(.55);
-
-    }
-
-    65% {
-
-        opacity: 1;
-
-        transform: scale(1.08);
-
-    }
-
-    100% {
-
-        opacity: 1;
-
-        transform: scale(1);
-
-    }
-
+    0%   { transform: scale(.55); }
+    65%  { transform: scale(1.08); }
+    100% { transform: scale(1); }
 }
 
-
-/* =========================================================
-   STICKER CACHÉ
-   ========================================================= */
-
-#expression-image.stickerpop-hidden {
-
+/* Sticker masqué par l'utilisateur : classe posée sur #expression-holder (jamais sur l'image, que ST remplace). */
+#expression-holder.stickerpop-hidden {
     opacity: 0 !important;
-
-    transform: scale(.55) !important;
-
+    visibility: hidden !important;
     pointer-events: none !important;
-
+    transition: opacity .18s ease, visibility 0s linear .18s;
 }
 
+/* Petit bouton pour réafficher (visible seulement quand un sticker est masqué) */
+#stickerpop-restore {
+    display: none;
+    position: fixed;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    font-size: 18px;
+    line-height: 36px;
+    text-align: center;
+    background: rgba(40, 40, 40, .55);
+    color: #fff;
+    opacity: .75;
+    z-index: 2147483000;
+    touch-action: manipulation;
+    cursor: pointer;
+}
 
-/* =========================================================
-   MOBILE
-   ========================================================= */
-
-@media (max-width: 600px) {
-
-    #expression-image {
-
-        touch-action: manipulation;
-
-    }
-
+#stickerpop-restore.stickerpop-restore-on {
+    display: block;
 }

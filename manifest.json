@@ -6,7 +6,7 @@
     "js": "index.js",
     "css": "style.css",
     "author": "Hydra",
-    "version": "1.0.0",
-    "homePage": "",
-    "auto_update": false
+    "version": "1.0.1",
+    "homePage": "https://github.com/hydravnss/stickerpop",
+    "auto_update": true
 }
