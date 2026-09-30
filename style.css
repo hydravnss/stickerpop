@@ -1,5 +1,8 @@
 /* =========================================================
-   STICKERPOP v1.0.1
+   STICKERPOP v1.1.0
+   Les animations sont pilotées par index.js (style inline !important sur #expression-holder), elles ne dépendent donc
+   pas de ce fichier. Les règles de masquage / bouton 🖼 sont aussi réinjectées par index.js en DERNIER dans <head>
+   (#stickerpop-style) avec une spécificité plus forte, pour gagner contre un CSS perso en !important.
    ========================================================= */
 
 #expression-wrapper {
@@ -20,46 +23,9 @@
     user-select: none;
 }
 
-/* Animation d'entrée : ajoutée/retirée par le JS sur l'image qui apparaît.
-   Elle ne touche PAS à opacity (SillyTavern fait déjà son fondu) et finit à scale(1) : aucune chance de rester invisible. */
-img.expression.stickerpop-enter {
-    animation: stickerPopIn .30s cubic-bezier(.2, .85, .3, 1.25) 1 none;
-}
-
-@keyframes stickerPopIn {
-    0%   { transform: scale(.55); }
-    65%  { transform: scale(1.08); }
-    100% { transform: scale(1); }
-}
-
 /* Sticker masqué par l'utilisateur : classe posée sur #expression-holder (jamais sur l'image, que ST remplace). */
 #expression-holder.stickerpop-hidden {
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
-    transition: opacity .18s ease, visibility 0s linear .18s;
-}
-
-/* Petit bouton pour réafficher (visible seulement quand un sticker est masqué) */
-#stickerpop-restore {
-    display: none;
-    position: fixed;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border: 0;
-    border-radius: 50%;
-    font-size: 18px;
-    line-height: 36px;
-    text-align: center;
-    background: rgba(40, 40, 40, .55);
-    color: #fff;
-    opacity: .75;
-    z-index: 2147483000;
-    touch-action: manipulation;
-    cursor: pointer;
-}
-
-#stickerpop-restore.stickerpop-restore-on {
-    display: block;
 }
