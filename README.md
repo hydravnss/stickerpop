@@ -1,13 +1,30 @@
 # StickerPop
 Extension SillyTavern : affiche le sprite des Character Expressions (#expression-holder) comme un sticker, que l'on peut **placer où l'on veut** et **redimensionner**.
 
-## Utilisation (v1.2.0)
+## Utilisation (v1.2.1)
 - **Un seul toucher** sur le sticker le fait **disparaître** ; un toucher **à l'endroit où il se trouvait** le fait **réapparaître**
   (zone transparente de la taille exacte du sticker, active uniquement tant qu'il est masqué). Ça marche à n'importe quelle position et taille.
 - Un **nouveau sticker** (changement d'expression) est toujours affiché, même si le précédent était masqué.
 - Aucun minuteur : le sticker reste affiché tant que vous ne le masquez pas.
 
-## Position et taille libres (nouveau en 1.2.0)
+## Cadre vide et compteur de swipes (nouveau en 1.2.1)
+Sur iPhone avec un thème qui dessine un cadre (bordure fine claire, fond semi-transparent), deux rectangles gênants pouvaient rester à l'écran sans sticker.
+Ce sont **deux éléments différents** :
+
+1. **Le cadre du sticker** (`#expression-holder`, 100 × 100 px minimum même sans image) : quand aucune image n'est affichable
+   (pas de `src`, image en échec / 404, personnage sans sprite), il est **entièrement masqué** (`display: none`, bordure / fond / ombre / contour retirés,
+   plus aucun toucher) et **réapparaît tout seul** dès qu'une image est chargée (avec l'animation d'apparition). Marche en mode thème comme en position
+   personnalisée. Quand vous masquez le sticker d'un toucher, le holder est aussi débarrassé de tout cadre ; la zone transparente pour le réafficher
+   fonctionne comme avant (elle est retirée si le personnage change pour un personnage sans sprite).
+   Réglage : **« Masquer le cadre quand il n'y a pas de sticker »** (activé par défaut).
+2. **Le bloc « > 1/1 »** en bas à droite du dernier message (`.swipeRightBlock` = flèche `.swipe_right` + compteur `.swipes-counter`) : il n'appartient **pas**
+   aux Expressions mais à SillyTavern, et s'affiche pour tout message de personnage avec un seul swipe (le thème lui ajoute bordure et fond). Deux options :
+   - **« Masquer le compteur de swipes 1/1 / flèche quand il n'y a qu'un seul swipe »** (activé par défaut) : masqué seulement quand le message n'a qu'un swipe ;
+     dès qu'il y en a 2 ou plus, flèches et compteur « 1/2 » réapparaissent.
+   - **« Masquer toujours le compteur de swipes et les flèches »** (désactivé par défaut).
+   Ces éléments sont seulement masqués (le message n'est pas modifié) : tant qu'ils le sont, la flèche et l'appui sur le compteur (historique des swipes) ne sont plus accessibles ; décochez l'option pour les retrouver.
+
+## Position et taille libres (1.2.0)
 Dans **Extensions > StickerPop > Position et taille du sticker** :
 
 1. Cochez **Utiliser une position et une taille personnalisées**. Au premier passage, le sticker reste exactement où il est (aucun saut) ;
@@ -52,6 +69,8 @@ un CSS perso qui force `opacity`, `transform` ou `transition` en `!important` su
 À la fin de chaque animation, les styles inline d'animation sont retirés (ou, pour un sticker masqué, remplacés par l'état masqué final) : le sticker ne reste jamais à moitié transparent.
 
 ## Mise à jour
+- **depuis 1.2.0** : aucun réglage à migrer ; `hideEmptyFrame` (true), `hideSwipe1` (true) et `hideSwipeAlways` (false) sont ajoutés avec leurs valeurs par défaut.
+  Pour retrouver exactement le comportement 1.2.0, décochez les deux premières options.
 - **depuis 1.1.0** : tous les réglages existants sont conservés ; la position personnalisée est **désactivée** par défaut, le sticker ne bouge donc pas tant que vous ne l'activez pas.
   Les nouveaux réglages (clés `placeEnabled`, `posX`, `posY`, `sizePct`, `maxHeightPct`, `rotation`, `flipH`, `flipV`, `opacity`, `layer`, `showHandle`, `perCharacter`, `positions`)
   sont enregistrés dans `extension_settings.stickerpop`, avec valeurs invalides ramenées à leurs bornes / défauts.

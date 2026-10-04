@@ -1,10 +1,11 @@
 /* =========================================================
-   STICKERPOP v1.2.0
+   STICKERPOP v1.2.1
    Les animations sont pilotées par index.js (style inline !important sur #expression-holder), elles ne dépendent donc
    pas de ce fichier. Les règles de masquage / bouton 🖼 sont aussi réinjectées par index.js en DERNIER dans <head>
    (#stickerpop-style) avec une spécificité plus forte, pour gagner contre un CSS perso en !important.
    Position / taille personnalisées (v1.2.0) : tout est posé par index.js en style inline !important sur #expression-holder
    (déplacé dans <body>) et par la feuille #stickerpop-style ; rien à régler ici.
+   Cadre vide (v1.2.1) : la classe .stickerpop-empty est posée / retirée par index.js selon qu'une image est affichable ou non.
    ========================================================= */
 
 #expression-wrapper {
@@ -30,4 +31,19 @@
     opacity: 0 !important;
     visibility: hidden !important;
     pointer-events: none !important;
+    background: none !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: 0 !important;
+}
+
+/* Aucune image affichable (pas de src, échec de chargement, personnage sans sprite) : plus aucun cadre. */
+#expression-holder.stickerpop-empty {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+    background: none !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    outline: 0 !important;
 }
