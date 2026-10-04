@@ -2,6 +2,15 @@
  * StickerPop - extension SillyTavern
  * Affiche le sprite des « Character Expressions » (#expression-holder / #expression-image) comme un sticker.
  *
+ * v1.2.0
+ *  - POSITION ET TAILLE LIBRES : le sticker peut être placé n'importe où sur l'écran et redimensionné (curseurs Horizontal / Vertical
+ *    en % avec champs px, positions prédéfinies, mode « Déplacer » par glisser-déposer + pincement à deux doigts + poignée,
+ *    taille en % de la largeur de l'écran, hauteur max, rotation, miroir, opacité, calque devant / derrière le chat,
+ *    mémorisation par personnage facultative, bouton Réinitialiser).
+ *    En position personnalisée, #expression-holder est déplacé directement dans <body> (hors de tout ancêtre transformé :
+ *    un wrapper avec transform ne décale plus le sticker) et placé en position:fixed !important en % de l'écran (zone de sécurité iOS comprise).
+ *    Position personnalisée désactivée (défaut) = comportement 1.1.0 strictement identique.
+ *
  * v1.1.0
  *  - COMPORTEMENT D'ORIGINE RESTAURÉ : UN SEUL toucher sur le sticker le fait disparaître ; un toucher à l'endroit où il
  *    se trouvait le fait réapparaître (zone transparente, de la taille exacte du sticker, active seulement pendant le masquage).
@@ -29,7 +38,10 @@
     const TAP_MAX_MS = 500;     // durée max d'un toucher
     const TAP_MAX_MOVE = 10;    // déplacement max (px) d'un toucher
     const DOUBLE_TAP_MS = 400;  // délai max entre 2 touchers (mode « double toucher » facultatif)
-    const SETTINGS_VERSION = 2;
+    const SETTINGS_VERSION = 3;
+    const SIZE_MIN = 5;         // % de la largeur de l'écran
+    const SIZE_PX_MIN = 40;
+    const SIZE_PX_MAX = 1200;
 
     const EASINGS = Object.freeze({
         'ease': [0.25, 0.1, 0.25, 1],
@@ -54,8 +66,24 @@
         duration: 350,
         easing: 'ease',
         showRestoreButton: false, // bouton 🖼 facultatif
+        // --- v1.2.0 : position / taille personnalisées (désactivées par défaut = comportement 1.1.0) ---
+        placeEnabled: false,
+        placed: false,           // true une fois la position initialisée à partir de l'emplacement réel du sticker
+        posX: 100,               // 0-100 % : 0 = bord gauche, 100 = bord droit (le sticker reste entièrement visible)
+        posY: 100,               // 0-100 % : 0 = haut, 100 = bas
+        sizePct: 30,             // largeur en % de la largeur de l'écran (5-100), 40-1200 px
+        maxHeightPct: 90,        // garde-fou : hauteur max en % de la hauteur de l'écran (20-100)
+        rotation: 0,             // -180..180 °
+        flipH: false,
+        flipV: false,
+        opacity: 100,            // 10-100 %
+        layer: 'front',          // 'front' (devant le chat) | 'back' (derrière)
+        showHandle: true,        // poignée de redimensionnement en mode Déplacer
+        perCharacter: false,     // mémoriser position / taille par personnage (sinon global)
         settingsVersion: SETTINGS_VERSION,
     });
+    // réglages remis à zéro par « Réinitialiser » (perCharacter et showHandle sont des préférences et restent)
+    const RESET_KEYS = ['placeEnabled', 'placed', 'posX', 'posY', 'sizePct', 'maxHeightPct', 'rotation', 'flipH', 'flipV', 'opacity', 'layer'];
 
     /* ---------------- catalogue d'animations ----------------
        Chaque animation est une suite d'images clés [position 0..1, propriétés] décrivant l'APPARITION
@@ -105,25 +133,36 @@
         try { return globalThis.SillyTavern?.getContext?.() ?? null; } catch { return null; }
     }
 
-    function settings() {
-        const c = ctx();
-        if (!c || !c.extensionSettings) return { ...DEFAULTS };
-        const s = c.extensionSettings[MODULE] ?? (c.extensionSettings[MODULE] = {});
-        for (const k of Object.keys(DEFAULTS)) {
-            if (s[k] === undefined) s[k] = DEFAULTS[k];
-        }
-        // Migration : en 1.0.1 « double » était la valeur par défaut ; le comportement d'origine est le simple toucher.
-        if (s.settingsVersion !== SETTINGS_VERSION) {
-            if (s.hideMode === 'double') s.hideMode = 'single';
-            s.settingsVersion = SETTINGS_VERSION;
-        }
+    /** Valide / borne tous les réglages (migration sûre : toute valeur absente ou invalide revient à sa valeur par défaut). */
+    function sanitize(s) {
         if (!['single', 'double', 'never'].includes(s.hideMode)) s.hideMode = DEFAULTS.hideMode;
         if (!ANIM_MAP[s.animIn]) s.animIn = DEFAULTS.animIn;
         if (!ANIM_MAP[s.animOut]) s.animOut = DEFAULTS.animOut;
         if (!(s.easing in EASINGS)) s.easing = DEFAULTS.easing;
         const d = Number(s.duration);
         s.duration = Number.isFinite(d) ? Math.min(2000, Math.max(100, Math.round(d))) : DEFAULTS.duration;
+        const n = (k, a, b) => { s[k] = Math.min(b, Math.max(a, numOr(s[k], DEFAULTS[k]))); };
+        n('posX', 0, 100); n('posY', 0, 100); n('sizePct', SIZE_MIN, 100); n('maxHeightPct', 20, 100);
+        n('rotation', -180, 180); n('opacity', 10, 100);
+        ['placeEnabled', 'placed', 'flipH', 'flipV', 'showHandle', 'perCharacter'].forEach((k) => { s[k] = !!s[k]; });
+        if (s.layer !== 'back') s.layer = 'front';
+        if (!s.positions || typeof s.positions !== 'object' || Array.isArray(s.positions)) s.positions = {};
         return s;
+    }
+
+    function settings() {
+        const c = ctx();
+        if (!c || !c.extensionSettings) return sanitize({ ...DEFAULTS });
+        const s = c.extensionSettings[MODULE] ?? (c.extensionSettings[MODULE] = {});
+        for (const k of Object.keys(DEFAULTS)) {
+            if (s[k] === undefined) s[k] = DEFAULTS[k];
+        }
+        // Migration : en 1.0.1 « double » était la valeur par défaut ; le comportement d'origine est le simple toucher.
+        if (s.settingsVersion !== SETTINGS_VERSION) {
+            if (s.hideMode === 'double' && !(Number(s.settingsVersion) >= 2)) s.hideMode = 'single';
+            s.settingsVersion = SETTINGS_VERSION;
+        }
+        return sanitize(s);
     }
 
     function saveSettings() {
@@ -429,6 +468,484 @@
         restoreBtn?.classList.toggle('stickerpop-restore-on', !!on);
     }
 
+    /* ---------------- position et taille personnalisées (v1.2.0) ---------------- */
+
+    const CLS_CUSTOM = 'stickerpop-custom';
+    const CLS_VNOFF = 'stickerpop-vn-off';
+    const CLS_MOVING = 'stickerpop-moving';
+    const CLS_GHOST = 'stickerpop-ghost';
+    const MOVE_ID = 'stickerpop-move';
+    const HANDLE_ID = 'stickerpop-handle';
+    const BAR_ID = 'stickerpop-bar';
+    const SAFE_ID = 'stickerpop-safe';
+    const Z_FRONT = 1500;       // devant le chat (#sheld = 30), toujours sous les tiroirs / fenêtres de SillyTavern (≥ 2000)
+    const Z_BACK = 2;           // derrière le chat (valeur d'origine de SillyTavern pour le sprite)
+    const DRAG_THRESHOLD = 3;   // px avant qu'un doigt posé en mode Déplacer devienne un glissement
+    const HANDLE_SIZE = 30;
+    const PLACE_PROPS = ['position', 'left', 'top', 'right', 'bottom', 'width', 'height', 'min-width', 'min-height', 'max-width', 'max-height', 'margin', 'z-index'];
+
+    let lastGeom = null;         // géométrie appliquée en dernier (px)
+    let lastAr = 0;              // dernier rapport hauteur/largeur connu du sprite
+    let origin = null;           // { parent, next, inline } : emplacement d'origine du holder dans le DOM
+    let safeProbe = null;
+    let styleObserver = null;
+    let observedStyleHolder = null;
+    let moving = false;          // mode « Déplacer » actif
+    let mvEls = null;            // { overlay, handle, bar }
+    const ptrs = new Map();      // pointeurs actifs en mode Déplacer
+    let gesture = null;
+    let uiRaf = 0;
+    let lastViewW = 0;
+
+    const clamp = (v, a, b) => Math.min(b, Math.max(a, v));
+    const numOr = (v, d) => ((v === null || v === '' || v === undefined || !Number.isFinite(Number(v))) ? d : Number(v));
+    const pxs = (v) => `${+v.toFixed(3)}px`;
+
+    /** Clé du sticker / personnage courant (dossier de sprites d'Expressions, sinon avatar du personnage). */
+    function activeKey() {
+        const img = getImage();
+        const f = img?.getAttribute?.('data-sprite-folder-name');
+        if (f) return String(f);
+        const c = ctx();
+        const ch = c?.characters?.[c.characterId];
+        return String(ch?.avatar || ch?.name || '_');
+    }
+
+    function getLayout(s = settings()) {
+        const e = s.perCharacter ? s.positions[activeKey()] : null;
+        const src = e && typeof e === 'object' ? e : s;
+        return {
+            posX: clamp(numOr(src.posX, s.posX), 0, 100),
+            posY: clamp(numOr(src.posY, s.posY), 0, 100),
+            sizePct: clamp(numOr(src.sizePct, s.sizePct), SIZE_MIN, 100),
+        };
+    }
+
+    function setLayout(patch) {
+        const s = settings();
+        if (s.perCharacter) s.positions[activeKey()] = { ...getLayout(s), ...patch };
+        else Object.assign(s, patch);
+    }
+
+    function viewport() {
+        const de = document.documentElement;
+        return { w: de.clientWidth || innerWidth, h: de.clientHeight || innerHeight };
+    }
+
+    /** Zones de sécurité (encoche, barre d'accueil) via env(safe-area-inset-*). */
+    function insets() {
+        try {
+            if (!safeProbe || !safeProbe.isConnected) {
+                safeProbe = document.createElement('div');
+                safeProbe.id = SAFE_ID;
+                safeProbe.setAttribute('aria-hidden', 'true');
+                safeProbe.style.cssText = 'position:fixed;left:0;top:0;width:0;height:0;visibility:hidden;pointer-events:none;'
+                    + 'padding:env(safe-area-inset-top,0px) env(safe-area-inset-right,0px) env(safe-area-inset-bottom,0px) env(safe-area-inset-left,0px);';
+                document.body.appendChild(safeProbe);
+            }
+            const cs = getComputedStyle(safeProbe);
+            return { t: parseFloat(cs.paddingTop) || 0, r: parseFloat(cs.paddingRight) || 0, b: parseFloat(cs.paddingBottom) || 0, l: parseFloat(cs.paddingLeft) || 0 };
+        } catch { return { t: 0, r: 0, b: 0, l: 0 }; }
+    }
+
+    /** Rapport hauteur/largeur du sprite courant (le dernier <img> chargé de #expression-holder). */
+    function aspect() {
+        const imgs = getHolder()?.querySelectorAll(IMAGE_SELECTOR);
+        if (!imgs) return 0;
+        for (let i = imgs.length - 1; i >= 0; i--) {
+            const im = imgs[i];
+            if (im.naturalWidth > 0 && im.naturalHeight > 0) return im.naturalHeight / im.naturalWidth;
+        }
+        return 0;
+    }
+
+    /**
+     * Géométrie du sticker. Position : 0 % = collé au bord gauche/haut (zone de sécurité comprise), 100 % = collé au bord
+     * droit/bas ; le sticker ne peut donc jamais sortir de l'écran. Taille : % de la largeur de l'écran (40-1200 px), ratio conservé,
+     * hauteur limitée à maxHeightPct % de l'écran.
+     */
+    function computeGeom(s = settings()) {
+        const { w: vw, h: vh } = viewport();
+        const ins = insets();
+        const L = getLayout(s);
+        const ar = aspect() || lastAr || 1;
+        const availW = Math.max(1, vw - ins.l - ins.r);
+        const availH = Math.max(1, vh - ins.t - ins.b);
+        let w = Math.min(clamp((L.sizePct / 100) * vw, SIZE_PX_MIN, SIZE_PX_MAX), availW);
+        const maxH = Math.min(availH, (s.maxHeightPct / 100) * vh);
+        let h = w * ar;
+        if (h > maxH) { h = maxH; w = h / ar; }
+        const minL = ins.l, maxL = Math.max(minL, vw - ins.r - w);
+        const minT = ins.t, maxT = Math.max(minT, vh - ins.b - h);
+        return {
+            vw, vh, ins, ar, w, h, minL, maxL, minT, maxT,
+            left: minL + (L.posX / 100) * (maxL - minL),
+            top: minT + (L.posY / 100) * (maxT - minT),
+            posX: L.posX, posY: L.posY, sizePct: L.sizePct,
+        };
+    }
+
+    const pctFromPx = (v, min, max) => (max - min > 0.01 ? clamp(((v - min) / (max - min)) * 100, 0, 100) : 0);
+
+    function wrapperHidden() {
+        const w = document.getElementById('expression-wrapper');
+        return !!w && getComputedStyle(w).display === 'none'; // mode « Visual Novel » : le wrapper est masqué, le holder d'origine aussi
+    }
+
+    function adopt(holder) {
+        if (holder.parentElement === document.body) return;
+        if (!origin || origin.holder !== holder) {
+            const inline = {};
+            PLACE_PROPS.forEach((p) => { inline[p] = [holder.style.getPropertyValue(p), holder.style.getPropertyPriority(p)]; });
+            origin = { holder, parent: holder.parentElement, next: holder.nextSibling, inline };
+        }
+        document.body.appendChild(holder); // hors de tout ancêtre transformé : position:fixed redevient relative à l'écran
+    }
+
+    function releasePlacement(holder = getHolder()) {
+        lastGeom = null;
+        if (!holder) { origin = null; return; }
+        holder.classList.remove(CLS_CUSTOM, CLS_VNOFF);
+        ['--spop-opacity', '--spop-img-tf'].forEach((p) => holder.style.removeProperty(p));
+        if (origin && origin.holder === holder) {
+            PLACE_PROPS.forEach((p) => {
+                const [v, pr] = origin.inline[p] || ['', ''];
+                if (v) holder.style.setProperty(p, v, pr); else holder.style.removeProperty(p);
+            });
+            if (holder.parentElement === document.body && origin.parent?.isConnected && origin.parent !== document.body) {
+                const next = origin.next && origin.next.parentNode === origin.parent ? origin.next : null;
+                origin.parent.insertBefore(holder, next);
+            }
+        } else {
+            PLACE_PROPS.forEach((p) => holder.style.removeProperty(p));
+        }
+        origin = null;
+        if (hidden && !ctrl) positionHitbox();
+    }
+
+    function placementIntact(holder) {
+        const g = lastGeom;
+        if (!g) return false;
+        const st = holder.style;
+        const imp = (p) => st.getPropertyPriority(p) === 'important';
+        for (const [p, want] of [['left', g.left], ['top', g.top], ['width', g.w], ['height', g.h]]) {
+            if (!imp(p) || Math.abs(parseFloat(st.getPropertyValue(p)) - want) > 0.05) return false;
+        }
+        if (!imp('position') || st.getPropertyValue('position') !== 'fixed' || !imp('min-width') || !imp('min-height')) return false;
+        return holder.classList.contains(CLS_CUSTOM) && holder.parentElement === document.body;
+    }
+
+    /** Applique (ou retire) la position / taille personnalisées sur #expression-holder. */
+    function applyPlacement() {
+        const holder = getHolder();
+        if (!holder) return;
+        const s = settings();
+        if (!s.placeEnabled) {
+            if (holder.classList.contains(CLS_CUSTOM) || origin) releasePlacement(holder);
+            syncMoveUI();
+            return;
+        }
+        adopt(holder);
+        const g = computeGeom(s);
+        const ar = aspect();
+        if (ar) lastAr = ar;
+        lastGeom = g;
+        const st = holder.style;
+        const set = (p, v) => st.setProperty(p, v, 'important');
+        set('position', 'fixed');
+        set('left', pxs(g.left));
+        set('top', pxs(g.top));
+        set('right', 'auto');
+        set('bottom', 'auto');
+        set('width', pxs(g.w));
+        set('height', pxs(g.h));
+        set('min-width', '0');
+        set('min-height', '0');
+        set('max-width', 'none');
+        set('max-height', 'none');
+        set('margin', '0');
+        set('z-index', String(s.layer === 'back' ? Z_BACK : Z_FRONT));
+        st.setProperty('--spop-opacity', String(clamp(s.opacity, 10, 100) / 100));
+        st.setProperty('--spop-img-tf', `rotate(${s.rotation}deg) scale(${s.flipH ? -1 : 1}, ${s.flipV ? -1 : 1})`);
+        holder.classList.add(CLS_CUSTOM);
+        holder.classList.toggle(CLS_VNOFF, wrapperHidden());
+        if (hidden && !ctrl) positionHitbox();
+        syncMoveUI();
+    }
+
+    function ensureStyleObserver() {
+        const holder = getHolder();
+        if (!holder || holder === observedStyleHolder) return;
+        styleObserver?.disconnect();
+        observedStyleHolder = holder;
+        styleObserver = new MutationObserver(() => {
+            // quelqu'un (ST : glisser du holder, mode VN, min-width de la transition d'expression…) a modifié nos styles : on les rétablit
+            if (ctrl || !settings().placeEnabled) return;
+            const h = getHolder();
+            if (h && !placementIntact(h)) applyPlacement();
+        });
+        styleObserver.observe(holder, { attributes: true, attributeFilter: ['style', 'class'] });
+        holder.addEventListener('load', () => { if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } }, true);
+    }
+
+    /** Position / taille actuelles du sticker (tel que le thème le place), exprimées comme nos réglages. */
+    function measureCurrent() {
+        const r = stickerRect();
+        if (!r) return null;
+        const { w: vw, h: vh } = viewport();
+        const ins = insets();
+        return {
+            sizePct: clamp((r.width / vw) * 100, SIZE_MIN, 100),
+            posX: pctFromPx(r.left, ins.l, Math.max(ins.l, vw - ins.r - r.width)),
+            posY: pctFromPx(r.top, ins.t, Math.max(ins.t, vh - ins.b - r.height)),
+            left: r.left, top: r.top, w: r.width, h: r.height,
+        };
+    }
+
+    /** Activation : la première fois, on part de l'emplacement et de la taille actuels (aucun saut visible). */
+    function enablePlacement() {
+        const s = settings();
+        if (s.placeEnabled) return;
+        if (!s.placed) {
+            const m = measureCurrent();
+            if (m) {
+                lastAr = m.h / m.w;
+                setLayout({ posX: m.posX, posY: m.posY, sizePct: m.sizePct });
+            }
+            s.placed = true;
+        }
+        s.placeEnabled = true;
+        applyPlacement();
+    }
+
+    /** Modifie la mise en page (position / taille) : active le mode personnalisé si besoin, applique, enregistre. */
+    function changeLayout(patchOrFn, { save = true } = {}) {
+        enablePlacement();
+        const s = settings();
+        const g = computeGeom(s);
+        const patch = typeof patchOrFn === 'function' ? patchOrFn(g) : patchOrFn;
+        if (patch) {
+            const lay = {};
+            ['posX', 'posY', 'sizePct'].forEach((k) => { if (k in patch) lay[k] = patch[k]; });
+            if (Object.keys(lay).length) setLayout(lay);
+            ['rotation', 'flipH', 'flipV', 'opacity', 'layer', 'maxHeightPct'].forEach((k) => { if (k in patch) s[k] = patch[k]; });
+        }
+        sanitize(s);
+        // la taille enregistrée reste dans la plage réellement utilisable (40-1200 px) : pas de « zone morte » du curseur
+        const L1 = getLayout(s);
+        const lo = Math.max(SIZE_MIN, (SIZE_PX_MIN / g.vw) * 100), hi = Math.min(100, (SIZE_PX_MAX / g.vw) * 100);
+        if (L1.sizePct < lo - 1e-9 || L1.sizePct > hi + 1e-9) setLayout({ sizePct: clamp(L1.sizePct, lo, Math.max(lo, hi)) });
+        applyPlacement();
+        scheduleUiSync();
+        if (save) saveSettings();
+    }
+
+    const setPosPx = (axis, px) => changeLayout((g) => (axis === 'x' ? { posX: pctFromPx(px, g.minL, g.maxL) } : { posY: pctFromPx(px, g.minT, g.maxT) }));
+    const setSizePx = (px) => changeLayout((g) => ({ sizePct: clamp((clamp(px, SIZE_PX_MIN, SIZE_PX_MAX) / g.vw) * 100, SIZE_MIN, 100) }));
+
+    function resetPlacement() {
+        if (moving) stopMove();
+        const s = settings();
+        for (const k of RESET_KEYS) s[k] = DEFAULTS[k];
+        s.positions = {};
+        applyPlacement();
+        syncPlacementUI();
+        saveSettings();
+    }
+
+    /* ---------------- mode « Déplacer » : glisser, pincer, poignée ---------------- */
+
+    function mkEl(id, cls) {
+        const el = document.createElement('div');
+        el.id = id;
+        if (cls) el.className = cls;
+        return el;
+    }
+
+    function syncMoveUI() {
+        if (!moving || !mvEls) return;
+        const g = lastGeom || computeGeom();
+        const o = mvEls.overlay.style;
+        o.setProperty('left', pxs(g.left), 'important');
+        o.setProperty('top', pxs(g.top), 'important');
+        o.setProperty('width', pxs(g.w), 'important');
+        o.setProperty('height', pxs(g.h), 'important');
+        const show = !!settings().showHandle;
+        const hs = mvEls.handle.style;
+        hs.setProperty('display', show ? 'block' : 'none', 'important');
+        hs.setProperty('left', pxs(clamp(g.left + g.w - HANDLE_SIZE / 2, 0, g.vw - HANDLE_SIZE)), 'important');
+        hs.setProperty('top', pxs(clamp(g.top + g.h - HANDLE_SIZE / 2, 0, g.vh - HANDLE_SIZE)), 'important');
+    }
+
+    function startMove() {
+        if (moving) return;
+        enablePlacement();
+        finishCtrl();
+        if (hidden) showSticker({ animate: false });
+        moving = true;
+        down = null;
+        const overlay = mkEl(MOVE_ID);
+        overlay.setAttribute('aria-label', 'Déplacer le sticker');
+        const handle = mkEl(HANDLE_ID);
+        handle.setAttribute('aria-label', 'Redimensionner le sticker');
+        const bar = mkEl(BAR_ID);
+        bar.innerHTML = '<span>Glissez le sticker · pincez pour la taille</span><button type="button">✓ Terminer</button>';
+        bar.querySelector('button').addEventListener('click', (e) => { e.preventDefault(); stopMove(); });
+        document.body.append(overlay, handle, bar);
+        mvEls = { overlay, handle, bar };
+        overlay.addEventListener('pointerdown', (e) => trackDown(e, 'drag'));
+        handle.addEventListener('pointerdown', (e) => trackDown(e, 'resize'));
+        overlay.addEventListener('wheel', (e) => {
+            e.preventDefault();
+            const f = Math.exp(-e.deltaY * 0.0015);
+            changeLayout((g) => ({ sizePct: clamp(g.sizePct * f, SIZE_MIN, 100) }), { save: false });
+            saveSettings();
+        }, { passive: false });
+        // le menu contextuel / la loupe iOS ne doivent pas s'en mêler
+        [overlay, handle].forEach((el) => el.addEventListener('contextmenu', (e) => e.preventDefault()));
+        document.documentElement.classList.add(CLS_MOVING);
+        syncMoveUI();
+        syncMoveButton();
+    }
+
+    function stopMove() {
+        if (!moving) return;
+        moving = false;
+        ptrs.clear();
+        gesture = null;
+        mvEls?.overlay.remove(); mvEls?.handle.remove(); mvEls?.bar.remove();
+        mvEls = null;
+        document.documentElement.classList.remove(CLS_MOVING);
+        saveSettings();
+        syncMoveButton();
+        syncPlacementUI();
+    }
+
+    function beginGesture(kind) {
+        const g = computeGeom();
+        const pts = [...ptrs.values()];
+        if (pts.length >= 2) {
+            const [a, b] = pts;
+            gesture = {
+                kind: 'pinch', g0: g, d0: Math.max(1, Math.hypot(a.x - b.x, a.y - b.y)),
+                m0: { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, c0: { x: g.left + g.w / 2, y: g.top + g.h / 2 },
+            };
+        } else {
+            gesture = { kind, g0: g, p0: { x: pts[0].x, y: pts[0].y }, moved: kind === 'resize' };
+        }
+    }
+
+    function trackDown(e, kind) {
+        if (!moving) return;
+        if (e.pointerType === 'mouse' && e.button !== 0) return;
+        if (ptrs.has(e.pointerId) || ptrs.size >= 2) return;
+        e.preventDefault();
+        e.stopPropagation();
+        try { e.target.setPointerCapture?.(e.pointerId); } catch { /* pointeur synthétique : sans importance */ }
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        beginGesture(kind);
+    }
+
+    function onMoveDownDoc(e) {
+        if (!moving) return;
+        // deuxième doigt posé n'importe où à l'écran pendant qu'un premier tient le sticker : pincement
+        if (ptrs.size === 1 && !ptrs.has(e.pointerId) && !e.target?.closest?.(`#${BAR_ID}`)) {
+            e.preventDefault();
+            e.stopPropagation();
+            ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+            beginGesture('drag');
+        }
+    }
+
+    function onMoveMoveDoc(e) {
+        if (!moving || !ptrs.has(e.pointerId) || !gesture) return;
+        e.preventDefault();
+        ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        const g0 = gesture.g0;
+        if (gesture.kind === 'pinch') {
+            const [a, b] = [...ptrs.values()];
+            if (!b) return;
+            const d = Math.max(1, Math.hypot(a.x - b.x, a.y - b.y));
+            const m = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+            const sizePct = clamp(((g0.w * d) / gesture.d0 / g0.vw) * 100, SIZE_MIN, 100);
+            changeLayout((g) => {
+                // taille d'après l'écart des doigts, centre du sticker suivant le milieu des doigts
+                setLayout({ sizePct });
+                const g1 = computeGeom();
+                const cx = gesture.c0.x + (m.x - gesture.m0.x), cy = gesture.c0.y + (m.y - gesture.m0.y);
+                return { sizePct, posX: pctFromPx(cx - g1.w / 2, g1.minL, g1.maxL), posY: pctFromPx(cy - g1.h / 2, g1.minT, g1.maxT) };
+            }, { save: false });
+            return;
+        }
+        const p = ptrs.get(e.pointerId);
+        const dx = p.x - gesture.p0.x, dy = p.y - gesture.p0.y;
+        if (gesture.kind === 'drag') {
+            if (!gesture.moved && Math.hypot(dx, dy) < DRAG_THRESHOLD) return;
+            gesture.moved = true;
+            changeLayout((g) => ({ posX: pctFromPx(g0.left + dx, g.minL, g.maxL), posY: pctFromPx(g0.top + dy, g.minT, g.maxT) }), { save: false });
+        } else { // poignée : coin haut-gauche fixe, ratio conservé
+            const w = g0.w + (dx + dy / g0.ar) / 2;
+            const sizePct = clamp((w / g0.vw) * 100, SIZE_MIN, 100);
+            changeLayout(() => {
+                setLayout({ sizePct });
+                const g1 = computeGeom();
+                return { sizePct, posX: pctFromPx(g0.left, g1.minL, g1.maxL), posY: pctFromPx(g0.top, g1.minT, g1.maxT) };
+            }, { save: false });
+        }
+    }
+
+    function onMoveUpDoc(e) {
+        if (!moving || !ptrs.has(e.pointerId)) return;
+        ptrs.delete(e.pointerId);
+        if (ptrs.size === 0) { gesture = null; saveSettings(); scheduleUiSync(); } else beginGesture('drag'); // le doigt restant continue en glissement
+    }
+
+    /* ---------------- panneau : synchronisation des champs ---------------- */
+
+    function scheduleUiSync() {
+        if (uiRaf) return;
+        uiRaf = requestAnimationFrame(() => { uiRaf = 0; syncPlacementUI(); });
+    }
+
+    function syncMoveButton() {
+        const b = document.getElementById('stickerpop_move');
+        if (b) b.textContent = moving ? '✓ Terminer le déplacement' : '✋ Déplacer';
+    }
+
+    function syncPlacementUI() {
+        if (!document.getElementById('stickerpop_settings')) return;
+        const s = settings();
+        let g = computeGeom(s);
+        if (!s.placeEnabled) { // mode thème : les champs montrent où se trouve réellement le sticker (rien n'est modifié)
+            const m = measureCurrent();
+            if (m) g = { ...g, posX: m.posX, posY: m.posY, sizePct: m.sizePct, left: m.left, top: m.top, w: m.w };
+        }
+        const put = (id, v) => {
+            const el = document.getElementById(id);
+            if (el && document.activeElement !== el) el.value = String(v);
+        };
+        const r1 = (v) => Math.round(v * 10) / 10;
+        put('stickerpop_posX', r1(g.posX)); put('stickerpop_posX_n', r1(g.posX)); put('stickerpop_posX_px', r1(g.left));
+        put('stickerpop_posY', r1(g.posY)); put('stickerpop_posY_n', r1(g.posY)); put('stickerpop_posY_px', r1(g.top));
+        put('stickerpop_sizePct', r1(g.sizePct)); put('stickerpop_sizePct_n', r1(g.sizePct)); put('stickerpop_size_px', r1(g.w));
+        put('stickerpop_maxHeightPct', s.maxHeightPct); put('stickerpop_maxHeightPct_n', s.maxHeightPct);
+        put('stickerpop_rotation', s.rotation); put('stickerpop_rotation_n', s.rotation);
+        put('stickerpop_opacity', s.opacity); put('stickerpop_opacity_n', s.opacity);
+        put('stickerpop_layer', s.layer);
+        const chk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
+        chk('stickerpop_placeEnabled', s.placeEnabled); chk('stickerpop_flipH', s.flipH); chk('stickerpop_flipV', s.flipV);
+        chk('stickerpop_showHandle', s.showHandle); chk('stickerpop_perCharacter', s.perCharacter);
+        syncMoveButton();
+    }
+
+    function onViewportChange() {
+        const { w } = viewport();
+        const typing = /^(INPUT|TEXTAREA)$/.test(document.activeElement?.tagName || '');
+        if (typing && Math.abs(w - lastViewW) < 1) return; // ouverture du clavier : on ne bouge pas le sticker
+        lastViewW = w;
+        if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); }
+    }
+
     /* ---------------- masquer / réafficher ---------------- */
 
     /** État « masqué » définitif (après l'animation de sortie). */
@@ -459,7 +976,7 @@
         finishCtrl();
         const holder = getHolder();
         const img = getImage();
-        if (!holder || !img || hidden || !holderDisplayed()) return;
+        if (!holder || !img || hidden || moving || !holderDisplayed()) return;
         hidden = true;
         hiddenKey = keyOf(img);
         run('out', applyHiddenState); // l'élément reste visible pendant l'animation, puis passe en « masqué »
@@ -482,6 +999,7 @@
     /* ---------------- toucher sur le sticker ---------------- */
 
     function onPointerDown(e) {
+        if (moving) { down = null; return; } // en mode Déplacer, un toucher ne masque jamais le sticker
         const holder = getHolder();
         if (!holder || !e.target?.closest?.(`#${HOLDER_ID}`)) { down = null; return; }
         // l'en-tête (poignée de déplacement) et la poignée de redimensionnement ne comptent jamais
@@ -494,7 +1012,7 @@
     function onPointerUp(e) {
         const d = down;
         down = null;
-        if (!d) return;
+        if (!d || moving) return;
         const cfg = settings();
         if (!cfg.enabled || cfg.hideMode === 'never') return;
         const holder = getHolder();
@@ -544,6 +1062,7 @@
         let wasHidden = false;
         if (hidden && k !== hiddenKey) { showSticker({ animate: false }); wasHidden = true; }
         if (!hidden && isNew && settings().animNew && (wasHidden || !ctrl)) run('in');
+        if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } // nouveau ratio / personnage : on recalcule la taille et la position
         if (hidden) { positionHitbox(); syncRestoreButton(); }
     }
 
@@ -562,10 +1081,20 @@
     /* ---------------- feuille de style (injectée en dernier, spécificité élevée) ---------------- */
 
     const INJECTED_CSS = `
+html body #expression-holder.${CLS_CUSTOM} { transform: none !important; translate: none !important; rotate: none !important; scale: none !important; opacity: var(--spop-opacity, 1) !important; box-sizing: border-box !important; padding: 0 !important; border: 0 !important; overflow: visible !important; }
+html body #expression-holder.${CLS_CUSTOM} img.expression { position: absolute !important; left: 0 !important; top: 0 !important; width: 100% !important; height: 100% !important; min-width: 0 !important; min-height: 0 !important; max-width: none !important; max-height: none !important; margin: 0 !important; object-fit: contain !important; transform: var(--spop-img-tf, none) !important; transform-origin: 50% 50% !important; }
+html body #expression-holder.${CLS_CUSTOM} #expression-holderheader { display: none !important; }
+html body #expression-holder.${CLS_CUSTOM}.${CLS_VNOFF} { display: none !important; }
 html body #expression-holder.${CLS_HIDDEN} { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; transition: none !important; }
 html body #expression-holder img.expression { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; touch-action: manipulation; }
 html body #${RESTORE_ID} { display: none; position: fixed; width: 36px; height: 36px; padding: 0; border: 0; border-radius: 50%; font-size: 18px; line-height: 36px; text-align: center; background: rgba(40,40,40,.55); color: #fff; opacity: .75; z-index: 2147483000; touch-action: manipulation; cursor: pointer; }
 html body #${RESTORE_ID}.stickerpop-restore-on { display: block !important; }
+html body #${MOVE_ID} { position: fixed; z-index: 2147483000; margin: 0; padding: 0; box-sizing: border-box; background: rgba(74,140,255,.14); outline: 2px dashed rgba(255,255,255,.95); box-shadow: 0 0 0 1px rgba(0,0,0,.55); touch-action: none; pointer-events: auto; cursor: grab; transform: none; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; -webkit-tap-highlight-color: transparent; }
+html body #${HANDLE_ID} { position: fixed; z-index: 2147483001; width: ${HANDLE_SIZE}px; height: ${HANDLE_SIZE}px; margin: 0; padding: 0; box-sizing: border-box; border-radius: 50%; background: #fff; border: 3px solid #4a8cff; box-shadow: 0 1px 4px rgba(0,0,0,.5); touch-action: none; pointer-events: auto; cursor: nwse-resize; -webkit-user-select: none; user-select: none; -webkit-touch-callout: none; }
+html body #${BAR_ID} { position: fixed; z-index: 2147483002; left: 50%; top: calc(env(safe-area-inset-top, 0px) + 8px); transform: translateX(-50%); display: flex; align-items: center; gap: 10px; max-width: calc(100vw - 16px); padding: 6px 8px 6px 12px; border-radius: 20px; background: rgba(20,20,20,.88); color: #fff; font: 13px/1.25 -apple-system, system-ui, sans-serif; touch-action: manipulation; -webkit-user-select: none; user-select: none; }
+html body #${BAR_ID} button { border: 0; border-radius: 14px; padding: 7px 12px; background: #4a8cff; color: #fff; font: 600 13px/1 -apple-system, system-ui, sans-serif; white-space: nowrap; }
+html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none !important; }
+.${CLS_GHOST} { opacity: .08 !important; transition: opacity .1s !important; }
 `;
 
     function ensureStyle() {
@@ -654,6 +1183,89 @@ html body #${RESTORE_ID}.stickerpop-restore-on { display: block !important; }
       </div>
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_showRestoreButton"><span>Afficher aussi un petit bouton 🖼 pour réafficher</span></label>
       <hr>
+      <b>Position et taille du sticker</b>
+      <label class="checkbox_label"><input type="checkbox" id="stickerpop_placeEnabled"><span>Utiliser une position et une taille personnalisées</span></label>
+      <small>Désactivé : le sticker reste où votre thème / CSS le place (comportement d'origine). Activé : il est placé comme ci-dessous, sur tout l'écran.</small>
+      <div class="flex-container" style="gap:8px;margin:6px 0">
+        <button type="button" id="stickerpop_move" class="menu_button">✋ Déplacer</button>
+        <button type="button" id="stickerpop_reset" class="menu_button">↺ Réinitialiser</button>
+      </div>
+      <small>« Déplacer » masque ce panneau : faites glisser le sticker avec le doigt, pincez à deux doigts pour changer sa taille, puis touchez « ✓ Terminer ».</small>
+      <div style="margin:6px 0">
+        <label for="stickerpop_posX">Horizontal</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_posX" min="0" max="100" step="0.1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_posX_n" class="text_pole" min="0" max="100" step="0.1" style="width:64px"><span>%</span>
+          <input type="number" id="stickerpop_posX_px" class="text_pole" step="0.1" style="width:72px"><span>px</span>
+        </div>
+      </div>
+      <div style="margin:6px 0">
+        <label for="stickerpop_posY">Vertical</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_posY" min="0" max="100" step="0.1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_posY_n" class="text_pole" min="0" max="100" step="0.1" style="width:64px"><span>%</span>
+          <input type="number" id="stickerpop_posY_px" class="text_pole" step="0.1" style="width:72px"><span>px</span>
+        </div>
+      </div>
+      <div style="margin:6px 0">
+        <label>Positions prédéfinies</label>
+        <div id="stickerpop_presets" style="display:grid;grid-template-columns:repeat(3,48px);gap:6px">
+          <button type="button" class="menu_button" data-px="0" data-py="0" title="Coin haut gauche">↖</button>
+          <button type="button" class="menu_button" data-px="50" data-py="0" title="Haut au centre">↑</button>
+          <button type="button" class="menu_button" data-px="100" data-py="0" title="Coin haut droit">↗</button>
+          <button type="button" class="menu_button" data-px="0" data-py="50" title="Centre gauche">←</button>
+          <button type="button" class="menu_button" data-px="50" data-py="50" title="Centre de l'écran">●</button>
+          <button type="button" class="menu_button" data-px="100" data-py="50" title="Centre droit">→</button>
+          <button type="button" class="menu_button" data-px="0" data-py="100" title="Coin bas gauche">↙</button>
+          <button type="button" class="menu_button" data-px="50" data-py="100" title="Bas au centre">↓</button>
+          <button type="button" class="menu_button" data-px="100" data-py="100" title="Coin bas droit">↘</button>
+        </div>
+      </div>
+      <div style="margin:6px 0">
+        <label for="stickerpop_sizePct">Taille (largeur, % de l'écran)</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_sizePct" min="5" max="100" step="0.1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_sizePct_n" class="text_pole" min="5" max="100" step="0.1" style="width:64px"><span>%</span>
+          <input type="number" id="stickerpop_size_px" class="text_pole" min="40" max="1200" step="1" style="width:72px"><span>px</span>
+        </div>
+        <small>Le ratio de l'image est toujours conservé (40 à 1200 px).</small>
+      </div>
+      <div style="margin:6px 0">
+        <label for="stickerpop_maxHeightPct">Hauteur maximale (% de l'écran)</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_maxHeightPct" min="20" max="100" step="1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_maxHeightPct_n" class="text_pole" min="20" max="100" step="1" style="width:64px"><span>%</span>
+        </div>
+      </div>
+      <label class="checkbox_label"><input type="checkbox" id="stickerpop_showHandle"><span>Poignée de redimensionnement en mode Déplacer</span></label>
+      <div style="margin:6px 0">
+        <label for="stickerpop_rotation">Rotation</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_rotation" min="-180" max="180" step="1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_rotation_n" class="text_pole" min="-180" max="180" step="1" style="width:64px"><span>°</span>
+        </div>
+      </div>
+      <div class="flex-container" style="gap:14px;margin:6px 0">
+        <label class="checkbox_label"><input type="checkbox" id="stickerpop_flipH"><span>Miroir horizontal</span></label>
+        <label class="checkbox_label"><input type="checkbox" id="stickerpop_flipV"><span>Miroir vertical</span></label>
+      </div>
+      <div style="margin:6px 0">
+        <label for="stickerpop_opacity">Opacité</label>
+        <div class="flex-container alignItemsCenter" style="gap:6px;flex-wrap:nowrap">
+          <input type="range" id="stickerpop_opacity" min="10" max="100" step="1" style="flex:1;min-width:100px">
+          <input type="number" id="stickerpop_opacity_n" class="text_pole" min="10" max="100" step="1" style="width:64px"><span>%</span>
+        </div>
+      </div>
+      <div class="flex-container alignItemsCenter" style="gap:8px;margin:6px 0">
+        <label for="stickerpop_layer">Calque</label>
+        <select id="stickerpop_layer" class="text_pole" style="width:auto">
+          <option value="front">Devant le chat</option>
+          <option value="back">Derrière le chat</option>
+        </select>
+      </div>
+      <label class="checkbox_label"><input type="checkbox" id="stickerpop_perCharacter"><span>Mémoriser position et taille par personnage (sinon : réglage global)</span></label>
+      <small>Pendant que vous touchez un curseur de position / taille, ce panneau devient presque transparent pour voir le sticker.</small>
+      <hr>
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_animation"><span>Activer les animations</span></label>
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_animNew"><span>Animer aussi l'arrivée d'un nouveau sticker</span></label>
       <div class="flex-container alignItemsCenter" style="gap:8px;margin:6px 0">
@@ -708,14 +1320,61 @@ html body #${RESTORE_ID}.stickerpop-restore-on { display: block !important; }
         });
         $('#stickerpop_test_in').on('click', () => previewAnim('in'));
         $('#stickerpop_test_out').on('click', () => previewAnim('out'));
+        // ----- position / taille (v1.2.0) -----
+        const cfgNow = () => settings();
+        const bindPair = (id, fromValue, opts = {}) => {
+            // curseur (input) + champ numérique (change) liés
+            $(`#stickerpop_${id}`).on('input change', function () { fromValue(Number(this.value)); });
+            $(`#stickerpop_${id}_n`).on('change', function () { if (this.value !== '') fromValue(Number(this.value)); else syncPlacementUI(); });
+        };
+        bindPair('posX', (v) => Number.isFinite(v) && changeLayout({ posX: clamp(v, 0, 100) }));
+        bindPair('posY', (v) => Number.isFinite(v) && changeLayout({ posY: clamp(v, 0, 100) }));
+        bindPair('sizePct', (v) => Number.isFinite(v) && changeLayout({ sizePct: clamp(v, SIZE_MIN, 100) }));
+        bindPair('maxHeightPct', (v) => Number.isFinite(v) && changeLayout({ maxHeightPct: clamp(Math.round(v), 20, 100) }));
+        bindPair('rotation', (v) => Number.isFinite(v) && changeLayout({ rotation: clamp(Math.round(v), -180, 180) }));
+        bindPair('opacity', (v) => Number.isFinite(v) && changeLayout({ opacity: clamp(Math.round(v), 10, 100) }));
+        $('#stickerpop_posX_px').on('change', function () { if (this.value !== '') setPosPx('x', Number(this.value)); else syncPlacementUI(); });
+        $('#stickerpop_posY_px').on('change', function () { if (this.value !== '') setPosPx('y', Number(this.value)); else syncPlacementUI(); });
+        $('#stickerpop_size_px').on('change', function () { if (this.value !== '') setSizePx(Number(this.value)); else syncPlacementUI(); });
+        $('#stickerpop_layer').on('change', function () { changeLayout({ layer: this.value === 'back' ? 'back' : 'front' }); });
+        $('#stickerpop_flipH').on('change', function () { changeLayout({ flipH: this.checked }); });
+        $('#stickerpop_flipV').on('change', function () { changeLayout({ flipV: this.checked }); });
+        $('#stickerpop_showHandle').on('change', function () { cfgNow().showHandle = this.checked; syncMoveUI(); saveSettings(); });
+        $('#stickerpop_perCharacter').on('change', function () { cfgNow().perCharacter = this.checked; applyPlacement(); syncPlacementUI(); saveSettings(); });
+        $('#stickerpop_placeEnabled').on('change', function () {
+            if (this.checked) { enablePlacement(); } else { if (moving) stopMove(); cfgNow().placeEnabled = false; applyPlacement(); }
+            syncPlacementUI();
+            saveSettings();
+        });
+        $('#stickerpop_presets button').on('click', function () {
+            changeLayout({ posX: Number(this.dataset.px), posY: Number(this.dataset.py) });
+        });
+        $('#stickerpop_move').on('click', () => { if (moving) stopMove(); else startMove(); });
+        $('#stickerpop_reset').on('click', () => resetPlacement());
+        // pendant qu'on tient un curseur de position / taille, le tiroir de réglages devient presque transparent
+        const ghostEl = () => document.getElementById('stickerpop_settings')?.closest('.drawer-content');
+        const unghost = () => ghostEl()?.classList.remove(CLS_GHOST);
+        $('#stickerpop_settings input[type=range]').on('pointerdown touchstart', function () {
+            if (this.id === 'stickerpop_duration') return;
+            ghostEl()?.classList.add(CLS_GHOST);
+        });
+        $(document).on('pointerup pointercancel touchend touchcancel', unghost);
+        $(window).on('blur', unghost);
+        syncPlacementUI();
     }
 
     /* ---------------- initialisation ---------------- */
 
     function tick() {
+        if (!moving && document.getElementById('stickerpop_posX')?.getClientRects().length) syncPlacementUI(); // champs du panneau à jour tant qu'il est visible
         ensureStyle();
         attachObserver();
+        ensureStyleObserver();
         mountSettings();
+        if (!ctrl && !moving) {
+            const h0 = getHolder();
+            if (h0 && (settings().placeEnabled ? !placementIntact(h0) || h0.classList.contains(CLS_VNOFF) !== wrapperHidden() : h0.classList.contains(CLS_CUSTOM))) applyPlacement();
+        }
         if (hidden && !ctrl) {
             const h = getHolder();
             if (h && !h.classList.contains(CLS_HIDDEN)) applyHiddenState(); // quelqu'un a retiré notre état : on le rétablit
@@ -734,18 +1393,33 @@ html body #${RESTORE_ID}.stickerpop-restore-on { display: block !important; }
         const relayout = () => { if (hidden && !ctrl) { positionHitbox(); syncRestoreButton(); } };
         window.addEventListener('resize', relayout);
         window.addEventListener('orientationchange', relayout);
+        // position / taille personnalisées : recalcul à chaque changement de taille d'écran (iOS rapporte parfois la taille avec retard)
+        lastViewW = viewport().w;
+        window.addEventListener('resize', onViewportChange);
+        window.addEventListener('orientationchange', () => { onViewportChange(); setTimeout(onViewportChange, 350); });
+        // mode Déplacer : suivi des pointeurs au niveau du document (le 2e doigt peut se poser n'importe où)
+        document.addEventListener('pointerdown', onMoveDownDoc, { capture: true });
+        document.addEventListener('pointermove', onMoveMoveDoc, { capture: true, passive: false });
+        document.addEventListener('pointerup', onMoveUpDoc, { capture: true });
+        document.addEventListener('pointercancel', onMoveUpDoc, { capture: true });
+        // iOS : pas de zoom de la page ni de défilement pendant un glissement / pincement du sticker
+        document.addEventListener('touchmove', (e) => { if (moving && ptrs.size) e.preventDefault(); }, { capture: true, passive: false });
+        ['gesturestart', 'gesturechange'].forEach((n) => document.addEventListener(n, (e) => { if (moving) e.preventDefault(); }, { passive: false }));
+        document.addEventListener('keydown', (e) => { if (moving && e.key === 'Escape') stopMove(); });
         document.addEventListener('visibilitychange', () => { if (document.hidden) finishCtrl(); });
 
         attachObserver();
+        ensureStyleObserver();
+        if (settings().placeEnabled) applyPlacement();
         // #expression-holder est créé par l'extension Expressions, éventuellement après nous ; il peut être recréé.
         setInterval(tick, 1000);
         mountSettings();
 
         try {
             const c = ctx();
-            c?.eventSource?.on?.(c.eventTypes?.CHAT_CHANGED ?? 'chat_id_changed', () => showSticker({ animate: false }));
+            c?.eventSource?.on?.(c.eventTypes?.CHAT_CHANGED ?? 'chat_id_changed', () => { showSticker({ animate: false }); if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } });
         } catch (e) { console.warn(LOG, e); }
-        console.debug(LOG, 'prêt v1.1.0');
+        console.debug(LOG, 'prêt v1.2.0');
     }
 
     if (document.readyState === 'loading') {
