@@ -2,6 +2,16 @@
  * StickerPop - extension SillyTavern
  * Affiche le sprite des « Character Expressions » (#expression-holder / #expression-image) comme un sticker.
  *
+ * v1.2.2 (correctif « les stickers n'apparaissent plus »)
+ *  - Le masquage du cadre vide (v1.2.1) est désormais PUREMENT COSMÉTIQUE : plus aucun display:none / taille 0 ; le holder reste dans la mise
+ *    en page (visibility:hidden, bordure / fond / ombre retirés) et l'image continue de se charger normalement.
+ *  - Le cadre n'est considéré « vide » que si l'image n'a PAS de src, ou si son chargement a réellement échoué (error / chargée avec
+ *    naturalWidth = 0). Une image en cours de chargement ou chargée n'est JAMAIS masquée.
+ *  - Sécurité : si une image du holder a un src valide et naturalWidth > 0, le holder est forcé visible. Réévaluation sur load / error /
+ *    changement de src ou d'attribut / CHAT_CHANGED / MESSAGE_RECEIVED / rendu des messages / retour au premier plan, avec un contrôle
+ *    périodique (500 ms). Chaque étape est protégée (try/catch) : une erreur ne laisse jamais le cadre masqué (échec = visible).
+ *  - Nouveau réglage « Désactiver le masquage automatique » (mode sécurité) : coupe le masquage du cadre vide ET du compteur de swipes.
+ *
  * v1.2.1
  *  - CADRE VIDE MASQUÉ : quand aucun sticker n'est affiché (pas de src, image en échec, personnage sans sprite), #expression-holder est
  *    masqué en entier (display:none + bordure / fond / ombre / contour retirés + non interactif) et réapparaît tout seul dès qu'une image
@@ -98,6 +108,8 @@
         hideEmptyFrame: true,    // masquer entièrement le cadre quand il n'y a pas de sticker
         hideSwipe1: true,        // masquer le compteur « 1/1 » et la flèche quand le message n'a qu'un seul swipe
         hideSwipeAlways: false,  // masquer toujours le compteur de swipes et les flèches
+        // --- v1.2.2 ---
+        disableAutoHide: false,  // mode sécurité : aucun masquage automatique (cadre vide + compteur de swipes)
         settingsVersion: SETTINGS_VERSION,
     });
     // réglages remis à zéro par « Réinitialiser » (perCharacter et showHandle sont des préférences et restent)
@@ -145,7 +157,9 @@
     let styleMovedAt = 0;
     const savedInline = new Map();
     let pendingIn = false;       // un nouveau sticker est en cours de chargement alors que le cadre est vide : animer son arrivée une fois chargé
-    const failedSrc = new WeakMap(); // image -> src qui a déclenché un événement « error »
+    const failedSrc = new WeakMap(); // image -> { src, at } du dernier événement « error »
+    /** Exécute fn sans jamais laisser une exception se propager (une erreur ne doit pas casser le suivi du holder). */
+    function safe(fn) { try { return fn(); } catch (e) { console.warn(LOG, e); } }
     let chatObserver = null;
     let observedChat = null;
     let swipeRaf = 0;
@@ -167,7 +181,7 @@
         const n = (k, a, b) => { s[k] = Math.min(b, Math.max(a, numOr(s[k], DEFAULTS[k]))); };
         n('posX', 0, 100); n('posY', 0, 100); n('sizePct', SIZE_MIN, 100); n('maxHeightPct', 20, 100);
         n('rotation', -180, 180); n('opacity', 10, 100);
-        ['placeEnabled', 'placed', 'flipH', 'flipV', 'showHandle', 'perCharacter', 'hideEmptyFrame', 'hideSwipe1', 'hideSwipeAlways'].forEach((k) => { s[k] = !!s[k]; });
+        ['placeEnabled', 'placed', 'flipH', 'flipV', 'showHandle', 'perCharacter', 'hideEmptyFrame', 'hideSwipe1', 'hideSwipeAlways', 'disableAutoHide'].forEach((k) => { s[k] = !!s[k]; });
         if (s.layer !== 'back') s.layer = 'front';
         if (!s.positions || typeof s.positions !== 'object' || Array.isArray(s.positions)) s.positions = {};
         return s;
@@ -203,43 +217,63 @@
         return src.split('?')[0];
     }
 
-    /** Une image du holder est-elle réellement affichable (src non vide, chargée, pas en échec) ? */
-    function imgOk(im) {
+    const SVG_RE = /\.svg(\?|#|$)|^data:image\/svg/i;
+
+    /** L'image est-elle chargée ET affichable (src valide, naturalWidth > 0) ? C'est le critère du « failsafe » : visible quoi qu'il arrive. */
+    function imgLoaded(im) {
         const src = im.getAttribute('src');
         if (!src) return false;
-        if (failedSrc.get(im) === src) return false;
-        if (!im.complete) return false; // en cours de chargement : le cadre reste masqué jusqu'à l'arrivée de l'image
-        const svg = /\.svg(\?|#|$)/i.test(src) || /^data:image\/svg/i.test(src); // un SVG sans dimensions intrinsèques a naturalWidth = 0
-        return im.naturalWidth > 0 || svg;
+        return im.complete && (im.naturalWidth > 0 || (SVG_RE.test(src) && im.complete));
     }
 
+    /** L'image est-elle DÉFINITIVEMENT inutilisable ? (pas de src, erreur de chargement sur ce src, ou chargée avec naturalWidth = 0) */
+    function imgBroken(im) {
+        const src = im.getAttribute('src');
+        if (!src) return true;
+        if (imgLoaded(im)) return false;
+        if (im.complete && im.naturalWidth === 0 && !SVG_RE.test(src)) return true; // chargement terminé sans image
+        return false; // en cours de chargement (ou inconnu) : jamais considérée comme cassée
+    }
+
+    /** Une image du holder existe-t-elle ou est-elle en cours de chargement ? (= pas de cadre vide) */
     function hasSticker(h = getHolder()) {
-        return !!h && Array.from(h.querySelectorAll(IMAGE_SELECTOR)).some(imgOk);
+        return !!h && Array.from(h.querySelectorAll(IMAGE_SELECTOR)).some((im) => !imgBroken(im));
+    }
+
+    function hasLoadedSticker(h = getHolder()) {
+        return !!h && Array.from(h.querySelectorAll(IMAGE_SELECTOR)).some(imgLoaded);
     }
 
     const holderEmpty = () => !!getHolder()?.classList.contains(CLS_EMPTY);
 
     /**
-     * Cadre vide : s'il n'y a aucune image affichable, #expression-holder (et tout ce qui l'entoure : bordure, fond, ombre, contour)
-     * est masqué et non interactif ; il revient tout seul dès qu'une image est chargée.
+     * Cadre vide : purement cosmétique. Le holder reste dans la page (aucun display:none) ; sans image il perd bordure / fond / ombre et
+     * devient invisible et non interactif. Il revient tout seul dès qu'une image existe ou se charge.
+     * Échec = visible : toute erreur ou le mode sécurité retire la classe.
      */
     function syncEmpty() {
         const h = getHolder();
         if (!h) return;
-        const empty = !!settings().hideEmptyFrame && !hasSticker(h);
+        let empty = false;
+        try {
+            empty = !settings().disableAutoHide && !!settings().hideEmptyFrame && !hasSticker(h);
+            if (hasLoadedSticker(h)) empty = false; // failsafe : image valide chargée => holder forcé visible
+        } catch (e) { empty = false; console.warn(LOG, e); }
         const was = h.classList.contains(CLS_EMPTY);
         if (empty !== was) {
             h.classList.toggle(CLS_EMPTY, empty);
-            if (!empty) {
-                const animate = pendingIn && !hidden && settings().animNew;
-                pendingIn = false;
-                if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } // nouveau ratio : on recalcule la taille et la position
-                if (hidden && !ctrl) { ensureHitbox(); } // sticker masqué par l'utilisateur : la zone de toucher revient avec lui
-                if (animate) run('in');
-            } else if (hidden && !ctrl) {
-                removeHitbox(); // plus de sticker : rien à réafficher, aucune zone invisible ne doit intercepter les touchers
-            }
-            syncRestoreButton();
+            try {
+                if (!empty) {
+                    const animate = pendingIn && !hidden && settings().animNew;
+                    pendingIn = false;
+                    if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } // nouveau ratio : on recalcule la taille et la position
+                    if (hidden && !ctrl) { ensureHitbox(); } // sticker masqué par l'utilisateur : la zone de toucher revient avec lui
+                    if (animate) run('in');
+                } else if (hidden && !ctrl) {
+                    removeHitbox(); // plus de sticker : rien à réafficher, aucune zone invisible ne doit intercepter les touchers
+                }
+                syncRestoreButton();
+            } catch (e) { console.warn(LOG, e); }
         }
         syncNoBox();
     }
@@ -267,10 +301,12 @@
         const b = document.body;
         if (!b) return;
         const s = settings();
-        if (b.classList.contains(CLS_SW1) !== !!s.hideSwipe1) b.classList.toggle(CLS_SW1, !!s.hideSwipe1);
-        if (b.classList.contains(CLS_SWALL) !== !!s.hideSwipeAlways) b.classList.toggle(CLS_SWALL, !!s.hideSwipeAlways);
+        const sw1 = !!s.hideSwipe1 && !s.disableAutoHide;
+        const swAll = !!s.hideSwipeAlways && !s.disableAutoHide;
+        if (b.classList.contains(CLS_SW1) !== sw1) b.classList.toggle(CLS_SW1, sw1);
+        if (b.classList.contains(CLS_SWALL) !== swAll) b.classList.toggle(CLS_SWALL, swAll);
         document.querySelectorAll('#chat .mes').forEach((m) => {
-            const multi = !!s.hideSwipe1 && swipeCountOf(m) > 1;
+            const multi = sw1 && swipeCountOf(m) > 1;
             if (m.classList.contains(CLS_MULTI) !== multi) m.classList.toggle(CLS_MULTI, multi);
         });
     }
@@ -1160,7 +1196,7 @@
     /* ---------------- surveillance de #expression-holder ---------------- */
 
     function onHolderMutation(mutations) {
-        syncEmpty();
+        safe(syncEmpty);
         let newImage = null;
         for (const m of mutations) {
             if (m.type === 'childList') {
@@ -1195,13 +1231,13 @@
         holderObserver?.disconnect();
         observedHolder = holder;
         holderObserver = new MutationObserver(onHolderMutation);
-        holderObserver.observe(holder, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+        holderObserver.observe(holder, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class', 'style', 'srcset'] });
         // chargement / échec d'une image (événements qui ne remontent pas : écoute en phase de capture)
-        holder.addEventListener('load', () => syncEmpty(), true);
+        holder.addEventListener('load', () => safe(syncEmpty), true);
         holder.addEventListener('error', (e) => {
             const t = e.target;
-            if (t?.matches?.(IMAGE_SELECTOR)) failedSrc.set(t, t.getAttribute('src'));
-            syncEmpty();
+            if (t?.matches?.(IMAGE_SELECTOR) && t.getAttribute('src')) failedSrc.set(t, { src: t.getAttribute('src'), at: Date.now() });
+            safe(syncEmpty);
         }, true);
         syncEmpty();
         if (hidden && !ctrl) applyHiddenState();
@@ -1217,7 +1253,8 @@ html body #expression-holder.${CLS_CUSTOM} img.expression { position: absolute !
 html body #expression-holder.${CLS_CUSTOM} #expression-holderheader { display: none !important; }
 html body #expression-holder.${CLS_CUSTOM}.${CLS_VNOFF} { display: none !important; }
 html body #expression-holder.${CLS_HIDDEN} { opacity: 0 !important; visibility: hidden !important; pointer-events: none !important; transition: none !important; background: none !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; filter: none !important; }
-html body #expression-holder.${CLS_EMPTY} { display: none !important; visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; background: none !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; filter: none !important; }
+html body #expression-holder.${CLS_EMPTY} { visibility: hidden !important; opacity: 0 !important; pointer-events: none !important; background: none !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; filter: none !important; }
+html body #expression-holder.${CLS_EMPTY}:not(.${CLS_CUSTOM}) { min-width: 0 !important; min-height: 0 !important; padding: 0 !important; }
 html body #expression-wrapper.${CLS_NOBOX} { background: none !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; pointer-events: none !important; }
 html body.${CLS_SW1} .mes:not(.${CLS_MULTI}) :is(.swipeRightBlock, .swipe_right, .swipe_left, .swipes-counter),
 html body.${CLS_SWALL} :is(.swipeRightBlock, .swipe_right, .swipe_left, .swipes-counter) { display: none !important; visibility: hidden !important; pointer-events: none !important; background: none !important; border: 0 !important; box-shadow: none !important; outline: 0 !important; }
@@ -1324,6 +1361,8 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_hideSwipe1"><span>Masquer le compteur de swipes 1/1 / flèche quand il n'y a qu'un seul swipe</span></label>
       <small>Le petit bloc « &gt; 1/1 » en bas à droite du dernier message vient de SillyTavern. Il reste visible dès qu'il y a 2 swipes ou plus.</small>
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_hideSwipeAlways"><span>Masquer toujours le compteur de swipes et les flèches</span></label>
+      <label class="checkbox_label"><input type="checkbox" id="stickerpop_disableAutoHide"><span>Désactiver le masquage automatique</span></label>
+      <small>Mode sécurité : plus aucun masquage automatique (ni cadre vide, ni compteur de swipes). À cocher si un sticker n'apparaît pas.</small>
       <hr>
       <b>Position et taille du sticker</b>
       <label class="checkbox_label"><input type="checkbox" id="stickerpop_placeEnabled"><span>Utiliser une position et une taille personnalisées</span></label>
@@ -1448,6 +1487,7 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
         bindSelect('hideMode', 'hideMode', (v) => { if (v === 'never') showSticker({ animate: false }); });
         bindCheck('showRestoreButton', 'showRestoreButton', () => syncRestoreButton());
         bindCheck('hideEmptyFrame', 'hideEmptyFrame', () => syncEmpty());
+        bindCheck('disableAutoHide', 'disableAutoHide', () => { syncEmpty(); syncSwipes(); });
         bindCheck('hideSwipe1', 'hideSwipe1', () => syncSwipes());
         bindCheck('hideSwipeAlways', 'hideSwipeAlways', () => syncSwipes());
         bindCheck('animation', 'animation');
@@ -1511,6 +1551,12 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
     /* ---------------- initialisation ---------------- */
 
     function tick() {
+        safe(syncEmpty); // d'abord : le suivi du cadre vide ne doit dépendre d'aucune autre étape
+        safe(tickMain);
+        safe(syncEmpty);
+    }
+
+    function tickMain() {
         if (!moving && document.getElementById('stickerpop_posX')?.getClientRects().length) syncPlacementUI(); // champs du panneau à jour tant qu'il est visible
         ensureStyle();
         attachObserver();
@@ -1564,16 +1610,22 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
         if (settings().placeEnabled) applyPlacement();
         // #expression-holder est créé par l'extension Expressions, éventuellement après nous ; il peut être recréé.
         setInterval(tick, 1000);
+        setInterval(() => safe(syncEmpty), 500); // contrôle de sécurité indépendant du reste
+        document.addEventListener('visibilitychange', () => safe(syncEmpty));
+        window.addEventListener('pageshow', () => safe(syncEmpty));
+        window.addEventListener('focus', () => safe(syncEmpty));
         mountSettings();
 
         try {
             const c = ctx();
-            c?.eventSource?.on?.(c.eventTypes?.CHAT_CHANGED ?? 'chat_id_changed', () => { pendingIn = false; showSticker({ animate: false }); syncEmpty(); scheduleSwipeSync(); if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } });
+            c?.eventSource?.on?.(c.eventTypes?.CHAT_CHANGED ?? 'chat_id_changed', () => { pendingIn = false; showSticker({ animate: false }); safe(syncEmpty); setTimeout(() => safe(syncEmpty), 500); setTimeout(() => safe(syncEmpty), 2500); scheduleSwipeSync(); if (settings().placeEnabled) { applyPlacement(); scheduleUiSync(); } });
             // le nombre de swipes d'un message change : on remet à jour les classes (le MutationObserver du chat le fait aussi)
+            ['MESSAGE_RECEIVED', 'CHARACTER_MESSAGE_RENDERED', 'MESSAGE_SWIPED', 'CHARACTER_SELECTED', 'GROUP_UPDATED', 'SETTINGS_UPDATED', 'EXPRESSION_CHANGED', 'EXPRESSION_SET']
+                .forEach((k) => { const ev = c?.eventTypes?.[k]; if (ev) c.eventSource.on(ev, () => { safe(syncEmpty); setTimeout(() => safe(syncEmpty), 300); setTimeout(() => safe(syncEmpty), 1500); }); });
             ['MESSAGE_SWIPED', 'MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_SWIPE_DELETED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED']
                 .forEach((k) => { const ev = c?.eventTypes?.[k]; if (ev) c.eventSource.on(ev, () => { scheduleSwipeSync(); setTimeout(scheduleSwipeSync, 150); }); });
         } catch (e) { console.warn(LOG, e); }
-        console.debug(LOG, 'prêt v1.2.1');
+        console.debug(LOG, 'prêt v1.2.2');
     }
 
     if (document.readyState === 'loading') {
