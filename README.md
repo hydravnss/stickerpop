@@ -1,11 +1,22 @@
 # StickerPop
 Extension SillyTavern : affiche le sprite des Character Expressions (#expression-holder) comme un sticker, que l'on peut **placer où l'on veut** et **redimensionner**.
 
-## Utilisation (v1.2.2)
+## Utilisation (v1.2.3)
 - **Un seul toucher** sur le sticker le fait **disparaître** ; un toucher **à l'endroit où il se trouvait** le fait **réapparaître**
   (zone transparente de la taille exacte du sticker, active uniquement tant qu'il est masqué). Ça marche à n'importe quelle position et taille.
 - Un **nouveau sticker** (changement d'expression) est toujours affiché, même si le précédent était masqué.
 - Aucun minuteur : le sticker reste affiché tant que vous ne le masquez pas.
+
+## Performance 1.2.3 : saisie fluide (iPhone)
+StickerPop ne fait plus **rien** pendant que vous écrivez dans la barre de message :
+- plus de minuteries permanentes (avant : un passage toutes les secondes **et** toutes les 500 ms, qui relisait la mise en page —
+  `getClientRects`, `getBoundingClientRect`, `elementFromPoint`, `getComputedStyle` — et reparcourait tous les messages) ;
+  il reste un contrôle de sécurité léger toutes les 2 s, en pause quand l'app est en arrière-plan, sans aucune mesure de l'écran ;
+- les mesures (zone de toucher du sticker masqué, champs du panneau) attendent la fin de la frappe ;
+- le chat n'est plus observé en profondeur (seuls les ajouts / retraits de messages et les compteurs de swipes comptent) ;
+- les écouteurs tactiles « non passifs » du mode **Déplacer** ne sont actifs que pendant ce mode (le défilement iOS n'attend plus le JavaScript) ;
+- aucun écouteur de frappe (`keydown` / `input`) sur la barre de message.
+Aucun réglage ne change ; sticker, position / taille libres, mode Déplacer, cadre vide et compteur de swipes fonctionnent comme avant.
 
 ## Correctif 1.2.2 : « les stickers n'apparaissent plus »
 Si, après la mise à jour en 1.2.1, plus aucun sticker ne s'affichait : le masquage du cadre vide reposait sur `display:none` (dans la feuille de style **et** dans
@@ -14,7 +25,7 @@ Depuis 1.2.2 :
 - le masquage du cadre vide est **purement cosmétique** (plus de `display:none` : le holder reste dans la page, `visibility:hidden`, bordure / fond / ombre retirés) ;
 - le cadre n'est « vide » que s'il n'y a **aucun `src`** ou si l'image a **réellement échoué** (erreur / chargée avec `naturalWidth = 0`). Une image en cours de chargement n'est **jamais** masquée ;
 - **sécurité** : dès qu'une image a un `src` valide et `naturalWidth > 0`, le sticker est forcé visible ;
-- réévaluation à chaque `load` / `error` / changement de `src` / de classe / de style, aux événements SillyTavern (changement de chat, message reçu / rendu, swipe, sélection de personnage…), au retour au premier plan, plus un contrôle toutes les 500 ms ; chaque étape est isolée (une erreur laisse le cadre **visible**) ;
+- réévaluation à chaque `load` / `error` / changement de `src` / de classe / de style, aux événements SillyTavern (changement de chat, message reçu / rendu, swipe, sélection de personnage…), au retour au premier plan, plus un contrôle périodique (500 ms en 1.2.2, 2 s depuis 1.2.3) ; chaque étape est isolée (une erreur laisse le cadre **visible**) ;
 - nouveau réglage **« Désactiver le masquage automatique »** (mode sécurité) : coupe tout masquage automatique (cadre vide **et** compteur de swipes). À cocher en cas de souci.
 
 ## Cadre vide et compteur de swipes (1.2.1, adapté en 1.2.2)

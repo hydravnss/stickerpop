@@ -1,5 +1,5 @@
 /* =========================================================
-   STICKERPOP v1.2.2
+   STICKERPOP v1.2.3
    Les animations sont pilotées par index.js (style inline !important sur #expression-holder), elles ne dépendent donc
    pas de ce fichier. Les règles de masquage / bouton 🖼 sont aussi réinjectées par index.js en DERNIER dans <head>
    (#stickerpop-style) avec une spécificité plus forte, pour gagner contre un CSS perso en !important.

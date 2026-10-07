@@ -2,6 +2,18 @@
  * StickerPop - extension SillyTavern
  * Affiche le sprite des « Character Expressions » (#expression-holder / #expression-image) comme un sticker.
  *
+ * v1.2.3 (performance : plus aucun travail pendant la frappe)
+ *  - Plus de setInterval 1 s + 500 ms permanents : tout est piloté par les événements ; un contrôle de sécurité léger toutes les 2 s,
+ *    en pause en arrière-plan, sans aucune lecture de mise en page. Les mesures (zone de toucher, champs du panneau, <style> en dernier)
+ *    attendent que l'on ne soit pas en train d'écrire (simple lecture de document.activeElement) et passent par requestIdleCallback si dispo.
+ *  - Plus de getClientRects() chaque seconde pour savoir si le panneau est ouvert : IntersectionObserver.
+ *  - Observateur du chat réduit aux enfants directs de #chat (plus de subtree) et seulement pour de vrais .mes ; les compteurs de swipes
+ *    sont observés un par un. Le chat n'est reparcouru que si sa signature change (nombre de messages / swipes du dernier).
+ *  - getContext() (gros objet recréé à chaque appel) mis en cache pour la tâche en cours : 1 appel au lieu de ~30 par passage.
+ *  - Écouteurs touchmove / pointermove non passifs, gesture* et keydown sur tout le document posés UNIQUEMENT pendant le mode « Déplacer ».
+ *  - L'observateur du holder ignore nos propres écritures (classe / styles d'animation image par image) ; resize regroupé par image (rAF).
+ *  - Aucun changement de réglage ni de comportement visible.
+ *
  * v1.2.2 (correctif « les stickers n'apparaissent plus »)
  *  - Le masquage du cadre vide (v1.2.1) est désormais PUREMENT COSMÉTIQUE : plus aucun display:none / taille 0 ; le holder reste dans la mise
  *    en page (visibility:hidden, bordure / fond / ombre retirés) et l'image continue de se charger normalement.
@@ -9,7 +21,7 @@
  *    naturalWidth = 0). Une image en cours de chargement ou chargée n'est JAMAIS masquée.
  *  - Sécurité : si une image du holder a un src valide et naturalWidth > 0, le holder est forcé visible. Réévaluation sur load / error /
  *    changement de src ou d'attribut / CHAT_CHANGED / MESSAGE_RECEIVED / rendu des messages / retour au premier plan, avec un contrôle
- *    périodique (500 ms). Chaque étape est protégée (try/catch) : une erreur ne laisse jamais le cadre masqué (échec = visible).
+ *    périodique (500 ms ; 2 s depuis v1.2.3). Chaque étape est protégée (try/catch) : une erreur ne laisse jamais le cadre masqué (échec = visible).
  *  - Nouveau réglage « Désactiver le masquage automatique » (mode sécurité) : coupe le masquage du cadre vide ET du compteur de swipes.
  *
  * v1.2.1
@@ -166,8 +178,14 @@
 
     /* ---------------- réglages ---------------- */
 
+    // getContext() construit à chaque appel un gros objet (~200 propriétés) : on le garde pour la tâche en cours (vidé à la microtâche suivante)
+    let ctxCache = null;
     function ctx() {
-        try { return globalThis.SillyTavern?.getContext?.() ?? null; } catch { return null; }
+        if (ctxCache) return ctxCache;
+        let c = null;
+        try { c = globalThis.SillyTavern?.getContext?.() ?? null; } catch { c = null; }
+        if (c) { ctxCache = c; queueMicrotask(() => { ctxCache = null; }); }
+        return c;
     }
 
     /** Valide / borne tous les réglages (migration sûre : toute valeur absente ou invalide revient à sa valeur par défaut). */
@@ -288,9 +306,9 @@
     }
 
     /** Nombre de swipes d'un message (<= 1 : un seul). */
-    function swipeCountOf(mes) {
+    function swipeCountOf(mes, chat = ctx()?.chat) {
         const id = Number(mes.getAttribute('mesid'));
-        const msg = Number.isInteger(id) ? ctx()?.chat?.[id] : null;
+        const msg = Number.isInteger(id) ? chat?.[id] : null;
         if (msg) return Array.isArray(msg.swipes) ? msg.swipes.length : 1;
         const m = (mes.querySelector('.swipes-counter')?.textContent || '').match(/(\d+)\D+(\d+)/);
         return m ? Number(m[2]) : 1;
@@ -305,16 +323,45 @@
         const swAll = !!s.hideSwipeAlways && !s.disableAutoHide;
         if (b.classList.contains(CLS_SW1) !== sw1) b.classList.toggle(CLS_SW1, sw1);
         if (b.classList.contains(CLS_SWALL) !== swAll) b.classList.toggle(CLS_SWALL, swAll);
-        document.querySelectorAll('#chat .mes').forEach((m) => {
-            const multi = sw1 && swipeCountOf(m) > 1;
+        const chatEl = document.getElementById('chat');
+        if (!chatEl) return;
+        const chat = ctx()?.chat;
+        swipeSig = swipeSignature(chatEl, chat);
+        // aucune option active et aucune classe à retirer : rien à parcourir
+        if (!sw1 && !chatEl.querySelector(`.${CLS_MULTI}`)) return;
+        chatEl.querySelectorAll('.mes').forEach((m) => {
+            watchCounter(m);
+            const multi = sw1 && swipeCountOf(m, chat) > 1;
             if (m.classList.contains(CLS_MULTI) !== multi) m.classList.toggle(CLS_MULTI, multi);
         });
     }
 
+    /** Regroupe les demandes : un seul passage, ~120 ms après la dernière (jamais pendant une rafale de mutations). */
     function scheduleSwipeSync() {
         if (swipeRaf) return;
-        swipeRaf = requestAnimationFrame(() => { swipeRaf = 0; syncSwipes(); });
+        swipeRaf = setTimeout(() => { swipeRaf = 0; safe(syncSwipes); }, 120);
     }
+
+    let swipeSig = '';
+    /** Signature bon marché de l'état du chat (nombre de messages + swipes du dernier) : le filet de sécurité ne reparcourt le chat que si elle change. */
+    function swipeSignature(chatEl, chat) {
+        const last = chat?.[chat.length - 1];
+        return `${chat?.length ?? -1}|${chatEl.childElementCount}|${Array.isArray(last?.swipes) ? last.swipes.length : 1}`;
+    }
+
+    // Compteurs de swipes (« 1/2 ») : observés UN PAR UN (minuscules sous-arbres) au lieu de tout #chat en subtree.
+    // /addswipe, /delswipe… changent le compteur sans toujours émettre d'événement.
+    let counterObserver = null;
+    const watchedCounters = new WeakSet();
+    function watchCounter(mes) {
+        const c = mes.querySelector('.swipes-counter');
+        if (!c || watchedCounters.has(c)) return;
+        counterObserver ??= new MutationObserver(scheduleSwipeSync);
+        counterObserver.observe(c, { childList: true, characterData: true, subtree: true });
+        watchedCounters.add(c);
+    }
+
+    const isMes = (n) => n.nodeType === 1 && n.classList.contains('mes');
 
     function ensureChatObserver() {
         const chat = document.getElementById('chat');
@@ -322,11 +369,15 @@
         chatObserver?.disconnect();
         observedChat = chat;
         chatObserver = new MutationObserver((muts) => {
-            // seulement : messages ajoutés / retirés, ou compteur de swipes modifié (pas le texte en cours de streaming)
-            if (muts.some((m) => m.target === chat || m.target.closest?.('.swipes-counter'))) syncSwipes();
+            // v1.2.3 : enfants DIRECTS de #chat seulement (pas de subtree : ni le streaming, ni les indicateurs de saisie, ni le texte),
+            // et uniquement si un vrai message (.mes) a été ajouté / retiré. Le nombre de swipes est suivi par les événements de ST.
+            for (const m of muts) {
+                for (const n of m.addedNodes) if (isMes(n)) { scheduleSwipeSync(); return; }
+                for (const n of m.removedNodes) if (isMes(n)) { scheduleSwipeSync(); return; }
+            }
         });
-        chatObserver.observe(chat, { childList: true, subtree: true });
-        syncSwipes();
+        chatObserver.observe(chat, { childList: true });
+        scheduleSwipeSync();
     }
 
     function holderDisplayed() {
@@ -957,6 +1008,7 @@
         // le menu contextuel / la loupe iOS ne doivent pas s'en mêler
         [overlay, handle].forEach((el) => el.addEventListener('contextmenu', (e) => e.preventDefault()));
         document.documentElement.classList.add(CLS_MOVING);
+        setMoveListeners(true);
         syncMoveUI();
         syncMoveButton();
     }
@@ -969,6 +1021,7 @@
         mvEls?.overlay.remove(); mvEls?.handle.remove(); mvEls?.bar.remove();
         mvEls = null;
         document.documentElement.classList.remove(CLS_MOVING);
+        setMoveListeners(false);
         saveSettings();
         syncMoveButton();
         syncPlacementUI();
@@ -1051,6 +1104,24 @@
         if (!moving || !ptrs.has(e.pointerId)) return;
         ptrs.delete(e.pointerId);
         if (ptrs.size === 0) { gesture = null; saveSettings(); scheduleUiSync(); } else beginGesture('drag'); // le doigt restant continue en glissement
+    }
+
+    const onTouchMoveDoc = (e) => { if (moving && ptrs.size) e.preventDefault(); };
+    const onGestureDoc = (e) => { if (moving) e.preventDefault(); };
+    const onKeyDownDoc = (e) => { if (moving && e.key === 'Escape') stopMove(); };
+    /**
+     * v1.2.3 : les écouteurs du mode « Déplacer » (dont touchmove / pointermove NON passifs sur tout le document, qui obligent iOS à attendre
+     * le JavaScript avant chaque défilement, et keydown) ne sont posés QUE pendant le mode Déplacer, puis retirés.
+     */
+    function setMoveListeners(on) {
+        const f = on ? 'addEventListener' : 'removeEventListener';
+        document[f]('pointerdown', onMoveDownDoc, { capture: true });
+        document[f]('pointermove', onMoveMoveDoc, { capture: true, passive: false });
+        document[f]('pointerup', onMoveUpDoc, { capture: true });
+        document[f]('pointercancel', onMoveUpDoc, { capture: true });
+        document[f]('touchmove', onTouchMoveDoc, { capture: true, passive: false });
+        ['gesturestart', 'gesturechange'].forEach((n) => document[f](n, onGestureDoc, { passive: false }));
+        document[f]('keydown', onKeyDownDoc);
     }
 
     /* ---------------- panneau : synchronisation des champs ---------------- */
@@ -1196,6 +1267,8 @@
     /* ---------------- surveillance de #expression-holder ---------------- */
 
     function onHolderMutation(mutations) {
+        // v1.2.3 : nos propres écritures (classe du holder, styles d'animation image par image) ne déclenchent plus rien
+        if (!mutations.some((m) => m.type === 'childList' || m.target !== observedHolder)) return;
         safe(syncEmpty);
         let newImage = null;
         for (const m of mutations) {
@@ -1231,7 +1304,7 @@
         holderObserver?.disconnect();
         observedHolder = holder;
         holderObserver = new MutationObserver(onHolderMutation);
-        holderObserver.observe(holder, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class', 'style', 'srcset'] });
+        holderObserver.observe(holder, { childList: true, subtree: true, attributes: true, attributeFilter: ['src', 'class', 'srcset'] });
         // chargement / échec d'une image (événements qui ne remontent pas : écoute en phase de capture)
         holder.addEventListener('load', () => safe(syncEmpty), true);
         holder.addEventListener('error', (e) => {
@@ -1550,6 +1623,40 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
 
     /* ---------------- initialisation ---------------- */
 
+    /* ---------------- surveillance périodique légère (v1.2.3) ----------------
+       Avant : setInterval 1 s (relecture de la mise en page : getClientRects, getBoundingClientRect, elementFromPoint, getComputedStyle,
+       parcours de tous les .mes) + setInterval 500 ms, en continu, même pendant la frappe.
+       Maintenant : tout est piloté par les événements ; il reste un contrôle de sécurité toutes les 2 s, en pause quand la page est en
+       arrière-plan, qui ne fait que des vérifications sans lecture de mise en page. Les étapes qui mesurent l'écran (zone de toucher,
+       champs du panneau) attendent que l'on ne soit pas en train d'écrire, et passent par requestIdleCallback quand il existe. */
+    const WATCHDOG_MS = 2000;
+    let watchdogTimer = 0;
+    let idleHandle = 0;
+    let panelVisible = false;
+    let panelIO = null;
+
+    /** L'utilisateur est-il en train d'écrire (champ de saisie actif) ? Simple lecture de document.activeElement, aucun écouteur de frappe. */
+    function isTyping() {
+        const a = document.activeElement;
+        return !!a && (a.id === 'send_textarea' || a.tagName === 'TEXTAREA' || a.tagName === 'INPUT' || a.isContentEditable);
+    }
+
+    function scheduleWatchdog() {
+        clearTimeout(watchdogTimer);
+        if (document.hidden) { watchdogTimer = 0; return; } // reprend sur visibilitychange
+        watchdogTimer = setTimeout(() => { watchdogTimer = 0; tick(); scheduleWatchdog(); }, WATCHDOG_MS);
+    }
+
+    /** Exécute fn quand le fil principal est libre (requestIdleCallback si disponible, sinon tout de suite : le contrôle est déjà espacé). */
+    function whenIdle(fn) {
+        if (idleHandle) return;
+        if (typeof requestIdleCallback === 'function') {
+            idleHandle = requestIdleCallback(() => { idleHandle = 0; safe(fn); }, { timeout: 1000 });
+        } else {
+            safe(fn);
+        }
+    }
+
     function tick() {
         safe(syncEmpty); // d'abord : le suivi du cadre vide ne doit dépendre d'aucune autre étape
         safe(tickMain);
@@ -1557,25 +1664,64 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
     }
 
     function tickMain() {
-        if (!moving && document.getElementById('stickerpop_posX')?.getClientRects().length) syncPlacementUI(); // champs du panneau à jour tant qu'il est visible
-        ensureStyle();
+        // vérifications bon marché (aucune lecture de mise en page)
         attachObserver();
         ensureStyleObserver();
         ensureChatObserver();
         mountSettings();
-        syncEmpty();
-        syncSwipes();
+        watchPanel();
+        if (hidden && !ctrl) {
+            const h = getHolder();
+            if (h && !h.classList.contains(CLS_HIDDEN)) applyHiddenState(); // quelqu'un a retiré notre état : on le rétablit
+        }
+        const chatEl = document.getElementById('chat');
+        if (chatEl && swipeSignature(chatEl, ctx()?.chat) !== swipeSig) scheduleSwipeSync(); // filet de sécurité (lecture d'un compteur, aucun parcours tant que rien ne change)
+        if (isTyping() && !panelVisible) return; // pendant la frappe : on ne touche ni au <head> ni à la mise en page
+        whenIdle(tickLayout);
+    }
+
+    /** Étapes qui lisent la mise en page / le style calculé : seulement hors frappe, au repos. */
+    function tickLayout() {
+        if (isTyping() && !panelVisible) return;
+        ensureStyle();
+        if (panelVisible && !moving) syncPlacementUI(); // champs du panneau à jour tant qu'il est visible
         if (!ctrl && !moving) {
             const h0 = getHolder();
             if (h0 && (settings().placeEnabled ? !placementIntact(h0) || h0.classList.contains(CLS_VNOFF) !== wrapperHidden() : h0.classList.contains(CLS_CUSTOM))) applyPlacement();
         }
         if (hidden && !ctrl) {
             const h = getHolder();
-            if (h && !h.classList.contains(CLS_HIDDEN)) applyHiddenState(); // quelqu'un a retiré notre état : on le rétablit
             if (h && !holderEmpty()) ensureHitbox();
             positionHitbox();
             syncRestoreButton();
         }
+    }
+
+    /** Visibilité du panneau de réglages via IntersectionObserver (asynchrone, aucun reflow forcé). */
+    function watchPanel() {
+        const el = document.getElementById('stickerpop_settings');
+        if (!el || panelIO?.target === el) return;
+        panelIO?.io.disconnect();
+        panelVisible = false;
+        if (typeof IntersectionObserver !== 'function') { panelVisible = true; return; }
+        const io = new IntersectionObserver((entries) => {
+            const vis = entries.some((e) => e.isIntersecting);
+            if (vis && !panelVisible) scheduleUiSync();
+            panelVisible = vis;
+        });
+        io.observe(el.querySelector('.inline-drawer-content') || el);
+        panelIO = { io, target: el };
+    }
+
+    let viewRaf = 0;
+    /** resize / orientationchange regroupés : un seul recalcul par image affichée. */
+    function onResize() {
+        if (viewRaf) return;
+        viewRaf = requestAnimationFrame(() => {
+            viewRaf = 0;
+            safe(onViewportChange);
+            if (hidden && !ctrl) { positionHitbox(); syncRestoreButton(); }
+        });
     }
 
     function start() {
@@ -1585,22 +1731,11 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
         document.addEventListener('pointerdown', onPointerDown, { capture: true, passive: true });
         document.addEventListener('pointerup', onPointerUp, { capture: true, passive: true });
         document.addEventListener('pointercancel', () => { down = null; }, { capture: true, passive: true });
-        const relayout = () => { if (hidden && !ctrl) { positionHitbox(); syncRestoreButton(); } };
-        window.addEventListener('resize', relayout);
-        window.addEventListener('orientationchange', relayout);
-        // position / taille personnalisées : recalcul à chaque changement de taille d'écran (iOS rapporte parfois la taille avec retard)
+        // position / taille personnalisées + zone de toucher : recalcul (regroupé par image) à chaque changement de taille d'écran
+        // (iOS rapporte parfois la taille avec retard). Les écouteurs du mode Déplacer ne sont posés que pendant ce mode (setMoveListeners).
         lastViewW = viewport().w;
-        window.addEventListener('resize', onViewportChange);
-        window.addEventListener('orientationchange', () => { onViewportChange(); setTimeout(onViewportChange, 350); });
-        // mode Déplacer : suivi des pointeurs au niveau du document (le 2e doigt peut se poser n'importe où)
-        document.addEventListener('pointerdown', onMoveDownDoc, { capture: true });
-        document.addEventListener('pointermove', onMoveMoveDoc, { capture: true, passive: false });
-        document.addEventListener('pointerup', onMoveUpDoc, { capture: true });
-        document.addEventListener('pointercancel', onMoveUpDoc, { capture: true });
-        // iOS : pas de zoom de la page ni de défilement pendant un glissement / pincement du sticker
-        document.addEventListener('touchmove', (e) => { if (moving && ptrs.size) e.preventDefault(); }, { capture: true, passive: false });
-        ['gesturestart', 'gesturechange'].forEach((n) => document.addEventListener(n, (e) => { if (moving) e.preventDefault(); }, { passive: false }));
-        document.addEventListener('keydown', (e) => { if (moving && e.key === 'Escape') stopMove(); });
+        window.addEventListener('resize', onResize, { passive: true });
+        window.addEventListener('orientationchange', () => { onResize(); setTimeout(onResize, 350); }, { passive: true });
         document.addEventListener('visibilitychange', () => { if (document.hidden) finishCtrl(); });
 
         attachObserver();
@@ -1608,13 +1743,15 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
         ensureChatObserver();
         syncSwipes();
         if (settings().placeEnabled) applyPlacement();
-        // #expression-holder est créé par l'extension Expressions, éventuellement après nous ; il peut être recréé.
-        setInterval(tick, 1000);
-        setInterval(() => safe(syncEmpty), 500); // contrôle de sécurité indépendant du reste
-        document.addEventListener('visibilitychange', () => safe(syncEmpty));
+        // #expression-holder est créé par l'extension Expressions, éventuellement après nous ; il peut être recréé :
+        // contrôle léger toutes les 2 s (en pause en arrière-plan), plus quelques passages rapprochés au démarrage.
+        scheduleWatchdog();
+        [300, 1000, 2500].forEach((ms) => setTimeout(tick, ms));
+        document.addEventListener('visibilitychange', () => { safe(syncEmpty); if (!document.hidden) { tick(); scheduleWatchdog(); } });
         window.addEventListener('pageshow', () => safe(syncEmpty));
         window.addEventListener('focus', () => safe(syncEmpty));
         mountSettings();
+        watchPanel();
 
         try {
             const c = ctx();
@@ -1625,7 +1762,7 @@ html.${CLS_MOVING} .drawer-content { opacity: 0 !important; pointer-events: none
             ['MESSAGE_SWIPED', 'MESSAGE_RECEIVED', 'MESSAGE_SENT', 'MESSAGE_DELETED', 'MESSAGE_SWIPE_DELETED', 'CHARACTER_MESSAGE_RENDERED', 'USER_MESSAGE_RENDERED']
                 .forEach((k) => { const ev = c?.eventTypes?.[k]; if (ev) c.eventSource.on(ev, () => { scheduleSwipeSync(); setTimeout(scheduleSwipeSync, 150); }); });
         } catch (e) { console.warn(LOG, e); }
-        console.debug(LOG, 'prêt v1.2.2');
+        console.debug(LOG, 'prêt v1.2.3');
     }
 
     if (document.readyState === 'loading') {
